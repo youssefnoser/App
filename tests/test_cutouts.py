@@ -41,6 +41,7 @@ def test_cutout_url():
         "http://evil.example/x.fits",
         "ibe/data/spherex/../../etc/passwd.fits",
         "ibe/data/spherex/a b.fits",
+        "ibe/data/spherex/x.fits\n",
     ],
 )
 def test_check_uri_rejects(uri):
