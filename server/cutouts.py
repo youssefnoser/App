@@ -33,7 +33,7 @@ class CutoutError(Exception):
 
 def check_uri(uri: str) -> None:
     """Raise ValueError unless uri is a SPHEREx file path under ibe/data/spherex/."""
-    if not URI_RE.match(uri) or ".." in uri:
+    if not URI_RE.fullmatch(uri) or ".." in uri:
         raise ValueError(f"Not a SPHEREx file path: {uri!r}")
 
 
