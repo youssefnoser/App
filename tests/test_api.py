@@ -111,12 +111,36 @@ def test_view_empty_is_200(client, monkeypatch):
         "ra=269&dec=91&fov=0.15",
         "ra=269&dec=4.7&fov=0",
         "ra=269&dec=4.7&fov=500",
+        "ra=269&dec=4.7&fov=1.5",
     ],
 )
 def test_view_rejects(client, monkeypatch, query):
     calls = patch_find(monkeypatch, [])
     assert client.get(f"/api/view?{query}").status_code == 422
     assert calls == []
+
+
+def test_view_fov_cap_is_inclusive(client, monkeypatch):
+    patch_find(monkeypatch, [])
+    assert client.get("/api/view?ra=269.4&dec=4.7&fov=1.0").status_code == 200
+
+
+def test_view_empty_not_cached(client, monkeypatch, tmp_path):
+    calls = patch_find(monkeypatch, [])
+    client.get(VIEW)
+    client.get(VIEW)
+    assert len(calls) == 2
+    assert not (tmp_path / "tap" / f"{CELL}.json").exists()
+
+
+def test_view_coverage_is_fast(client, monkeypatch, exposures):
+    import time
+
+    patch_find(monkeypatch, exposures)
+    client.get(VIEW)  # fill cache
+    start = time.perf_counter()
+    client.get("/api/view?ra=269.4463&dec=4.7677&fov=0.5")
+    assert time.perf_counter() - start < 0.5
 
 
 def test_view_irsa_down_502(client, monkeypatch):
@@ -165,7 +189,7 @@ def test_frame_png(client, monkeypatch, tmp_path):
     assert r2.content == r.content
     assert r2.headers["x-frame-meta"] == r.headers["x-frame-meta"]
     assert len(calls) == 1
-    assert list((tmp_path / "png" / str(CELL)).glob("*.png"))
+    assert list((tmp_path / "png" / str(PATCH_N) / str(CELL)).glob("*.png"))
 
 
 @pytest.mark.parametrize(
@@ -195,3 +219,17 @@ def test_frame_cutout_502(client, monkeypatch):
 def test_import_without_vendor_dirs():
     # Mounts are conditional, so the app object exists even with no vendor build.
     assert app_module.app is not None
+
+
+def test_frame_broken_cutout_502_and_file_removed(client, monkeypatch, tmp_path):
+    from astropy.io import fits
+
+    src = FIXTURES / "crop_barnard_D6_2026-03-19.fits"
+    broken = tmp_path / "broken.fits"
+    with fits.open(src) as hdul:
+        fits.HDUList([h for h in hdul if h.name != "ZODI"]).writeto(broken)
+    patch_cutout(monkeypatch, broken)
+    r = client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}")
+    assert r.status_code == 502
+    assert "IRSA" in r.json()["detail"]
+    assert not broken.exists()

@@ -1,9 +1,13 @@
 """Tests for the HEALPix patch grid and footprint coverage. Offline."""
+import numpy as np
+
 from server.irsa import decode_footprint
 from server.patches import (
     NPIX,
     cell_centre,
     cell_of,
+    cell_unit_vectors,
+    cells_covered,
     footprint_contains,
     view_cells,
 )
@@ -58,3 +62,17 @@ def test_ring0_is_overlap():
     ring0 = {p for p, r in cells.items() if r == 0}
     assert len(ring0) >= 2
     assert (ring0 - {2034010}) <= NEIGHBOURS
+
+
+def test_cells_covered_agrees_with_footprint_contains():
+    cases = [
+        (decode_footprint(HEX_WKB), [(269.4463, 4.7677), (272.0, 4.0), (269.4, 4.7), (89.4, -4.7)]),
+        (
+            ((359.0, -1.0), (1.0, -1.0), (1.0, 1.0), (359.0, 1.0)),
+            [(0.0, 0.0), (359.9, 0.5), (2.0, 0.0), (180.0, 0.0)],
+        ),
+    ]
+    for fp, points in cases:
+        got = cells_covered(fp, cell_unit_vectors(points))
+        assert got.dtype == bool
+        assert list(got) == [footprint_contains(fp, ra, dec) for ra, dec in points]
