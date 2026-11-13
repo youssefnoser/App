@@ -58,13 +58,6 @@ async function waitSettled(loader, n) {
   }
 }
 
-async function waitCalls(count, get) {
-  for (;;) {
-    if (get() >= count) return;
-    await new Promise((r) => setTimeout(r, 2));
-  }
-}
-
 test('order follows spec groups', () => {
   const list = priorityList(fakeView(), new Set());
   assert.deepEqual(
@@ -172,14 +165,14 @@ test('failed items retry only on retryFailed', async () => {
     },
   });
   loader.setQueue(priorityList(bigView(2), new Set()));
-  await waitCalls(2, () => calls);
   await waitSettled(loader, 2);
   assert.deepEqual(loader.stats, { done: 0, total: 2, failed: 2 });
   // Give any illegal automatic retry a chance to happen.
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(calls, 2, 'must not retry automatically');
   loader.retryFailed();
-  await waitCalls(4, () => calls);
+  assert.equal(loader.stats.failed, 0, 'retried items are no longer failed');
+  await waitSettled(loader, 2);
   assert.equal(calls, 4);
   assert.deepEqual(loader.stats, { done: 0, total: 2, failed: 2 });
 });
@@ -200,4 +193,74 @@ test('an item dropped by setQueue can be queued again before its abort settles',
   const s = await waitSettled(loader, 1);
   assert.deepEqual(s, { done: 1, total: 1, failed: 0 });
   assert.equal(started.length, 2);
+});
+
+test('within a group the order is mjd-major across cells (R13)', () => {
+  const covered = [100, 101, 102, 200, 201];
+  const view = {
+    cell: 100,
+    cells: [
+      { pix: 201, ring: 1 },
+      { pix: 102, ring: 0 },
+      { pix: 100, ring: 0 },
+      { pix: 200, ring: 1 },
+      { pix: 101, ring: 0 },
+    ],
+    exposures: [
+      { uri: 'e-b', mjd: 2, first: true, cells: covered },
+      { uri: 'e-a', mjd: 1, first: true, cells: covered },
+      { uri: 'e-d', mjd: 4, first: false, cells: covered },
+      { uri: 'e-c', mjd: 3, first: false, cells: covered },
+    ],
+  };
+  const got = priorityList(view, new Set()).map((it) => it.key);
+  assert.deepEqual(got, [
+    key(100, 'e-a'), key(100, 'e-b'), // 1 centre cell
+    key(101, 'e-a'), key(102, 'e-a'), key(101, 'e-b'), key(102, 'e-b'), // 2 other ring 0
+    key(200, 'e-a'), key(201, 'e-a'), key(200, 'e-b'), key(201, 'e-b'), // 3 ring 1
+    key(100, 'e-c'), key(100, 'e-d'), // 4 centre cell first ...
+    key(101, 'e-c'), key(102, 'e-c'), key(101, 'e-d'), key(102, 'e-d'), // ... then other ring 0
+    key(200, 'e-c'), key(201, 'e-c'), key(200, 'e-d'), key(201, 'e-d'), // 5 ring 1 rest
+  ]);
+});
+
+test('setQueue drops failed entries the new queue no longer wants', async () => {
+  let calls = 0;
+  const loader = new Loader({
+    fetchFn: async () => {
+      calls += 1;
+      throw new Error('boom');
+    },
+  });
+  loader.setQueue(priorityList(bigView(2), new Set()));
+  await waitSettled(loader, 2);
+  assert.equal(loader.stats.failed, 2);
+  // New view wants only u0: u1's failure is stale and must not be retried.
+  loader.setQueue(priorityList(bigView(2), new Set()).slice(0, 1));
+  assert.deepEqual(loader.stats, { done: 0, total: 1, failed: 1 });
+  loader.retryFailed();
+  await waitSettled(loader, 1);
+  assert.equal(calls, 3, 'only u0 is re-fetched');
+});
+
+test('setQueue ignores duplicate keys and concurrency is clamped', async () => {
+  let inflight = 0;
+  let max = 0;
+  let calls = 0;
+  const fetchFn = async () => {
+    calls += 1;
+    inflight += 1;
+    max = Math.max(max, inflight);
+    await new Promise((r) => setTimeout(r, 2));
+    inflight -= 1;
+  };
+  const items = priorityList(bigView(3), new Set());
+  const loader = new Loader({ fetchFn, concurrency: 0.4 });
+  loader.setQueue([...items, ...items]);
+  assert.equal(loader.stats.total, 3);
+  await waitSettled(loader, 3);
+  assert.equal(calls, 3);
+  assert.equal(max, 1);
+  assert.equal(new Loader({ fetchFn, concurrency: 99 }).concurrency, 8);
+  assert.equal(new Loader({ fetchFn, concurrency: 3.7 }).concurrency, 3);
 });
