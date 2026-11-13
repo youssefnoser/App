@@ -62,3 +62,26 @@ def test_first_batch_nearest_mid():
 def test_empty():
     assert group_visits([]) == []
     assert first_batch([]) == set()
+
+
+def _exp(mjd, detector=1):
+    return Exposure(f"ibe/data/spherex/{mjd}-{detector}.fits", float(mjd), detector, "", ())
+
+
+def test_long_unbroken_run_is_cut_into_slices_of_at_most_60_days():
+    # Near the ecliptic poles SPHEREx observes almost daily: no 60-day gap ever opens.
+    run = [_exp(60800 + d) for d in range(0, 150, 2)]  # 148 days, one every 2 days
+    visits = group_visits(run)
+    assert len(visits) == 3  # ceil(148 / 60)
+    assert sum(len(v) for v in visits) == len(run)
+    assert all(v[-1].mjd - v[0].mjd <= 60 for v in visits)
+    assert [e.mjd for v in visits for e in v] == sorted(e.mjd for e in run)
+
+
+def test_run_of_exactly_60_days_stays_one_visit():
+    assert len(group_visits([_exp(60800), _exp(60830), _exp(60860)])) == 1
+
+
+def test_first_batch_takes_one_per_slice_and_detector():
+    run = [_exp(60800 + d, det) for d in range(0, 150, 2) for det in (1, 2)]
+    assert len(first_batch(run)) == 6  # 3 slices x 2 detectors

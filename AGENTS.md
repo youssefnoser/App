@@ -43,7 +43,10 @@ uv run uvicorn server.app:app --reload --port 8000   # run (serves web/ at /)
 - **Moving targets:** coordinates the user types are a fixed patch of sky. Proper motion only matters for the predicted-position marker and
   for choosing the query centre of the test targets in `server/targets.py`.
 - **TLS verification stays on.** Only `SPHEREX_INSECURE_TLS=1` disables it, and only for the Claude Code sandbox where interception breaks it.
-- **IRSA is a shared public service.** Cache cutouts on disk, cap parallel downloads at 8, set a timeout on every request, no retry storms.
+- **IRSA is a shared public service.** Cap parallel downloads at 8, set a timeout on every request, no retry storms.
+  Pixels come from the AWS mirror by default (whole exposure files, cut locally, size-capped cache: `server/mirror.py`), and the
+  exposure list from the local snapshot (`server/catalog.py`). IRSA is asked only when the snapshot has no answer, and by
+  `scripts/snapshot_metadata.py`, which polls queued TAP jobs every 10 s until they answer (user decision, 2026-11-13).
 - **Do not commit data.** `data/`, `.cache/`, `*.fits` are ignored. A full Barnard's Star crop set is 1.4 GB.
 - **Keep files small and single-purpose.** The file table in `docs/ARCHITECTURE.md` is the map. Add a row when you add a file.
 - **Copy and tone for UI text:** plain sentences, say what happened and what to do next, no jargon without a gloss (MJy/sr, PSF, MJD).
