@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from server.app import app
@@ -48,6 +49,12 @@ def test_decode_footprint_known():
     assert abs(corners[2][1] - 1.660075) < 1e-5
 
 
+def test_decode_footprint_rejects_big_endian():
+    big_endian_hex = "00" + HEX_WKB[2:]
+    with pytest.raises(ValueError):
+        decode_footprint(big_endian_hex)
+
+
 def test_parse_fixture():
     rows = fixture_rows()
     exposures = parse_tap_csv(FIXTURE.read_text())
@@ -85,12 +92,18 @@ def test_find_exposures_http_error_raises():
 
     transport = httpx.MockTransport(handler)
     with httpx.Client(transport=transport) as client:
-        try:
+        with pytest.raises(IrsaError):
             find_exposures(269.4463, 4.7677, client=client)
-        except IrsaError:
-            pass
-        else:
-            raise AssertionError("IrsaError not raised")
+
+
+def test_find_exposures_malformed_raises():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not,a,tap\n1,2,3")
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as client:
+        with pytest.raises(IrsaError):
+            find_exposures(269.4463, 4.7677, client=client)
 
 
 def test_tls_verify_env(monkeypatch):
