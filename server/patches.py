@@ -77,3 +77,23 @@ def footprint_contains(footprint, ra: float, dec: float) -> bool:
         for i in range(len(corners))
     ]
     return all(s > 0 for s in signs) or all(s < 0 for s in signs)
+
+
+def cell_unit_vectors(points) -> np.ndarray:
+    """Unit vectors, shape (n, 3), for a list of (ra, dec) points in degrees."""
+    ra = np.radians([p[0] for p in points])
+    dec = np.radians([p[1] for p in points])
+    return np.stack([np.cos(dec) * np.cos(ra), np.cos(dec) * np.sin(ra), np.sin(dec)], axis=1)
+
+
+def cells_covered(footprint, xyz: np.ndarray) -> np.ndarray:
+    """Vectorised footprint_contains: bool array, one entry per row of xyz (unit vectors).
+
+    Same rule as footprint_contains, including the hemisphere guard.
+    """
+    corners = cell_unit_vectors(footprint)
+    inside_hemisphere = xyz @ corners.sum(axis=0) > 0.0
+    edges = np.cross(corners, np.roll(corners, -1, axis=0))  # (k, 3)
+    signs = xyz @ edges.T  # (n, k)
+    same_sign = np.all(signs > 0, axis=1) | np.all(signs < 0, axis=1)
+    return inside_hemisphere & same_sign

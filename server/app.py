@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import tempfile
+import warnings
 from pathlib import Path
 
 from astropy.io import fits
@@ -28,7 +29,8 @@ from server.patches import (
     PATCH_N,
     cell_centre,
     cell_of,
-    footprint_contains,
+    cell_unit_vectors,
+    cells_covered,
     view_cells,
 )
 from server.pixels import science_image
@@ -40,6 +42,9 @@ ROOT = Path(__file__).resolve().parent.parent
 ENGINE_DIR = ROOT / "vendor" / "stellarium-web-engine" / "build"
 SKYDATA_DIR = ROOT / "vendor" / "stellarium-web-engine" / "apps" / "test-skydata"
 WEB_DIR = ROOT / "web"
+
+# Frames only load below 0.5 deg; allow a 2x margin (ruling R14).
+MAX_FOV_DEG = 1.0
 
 app = FastAPI(title="SPHEREx Blink")
 
@@ -80,7 +85,8 @@ def _exposures_for_cell(cell: int) -> list[Exposure]:
          "footprint": [list(p) for p in e.footprint]}
         for e in exposures
     ]
-    _write_atomic(path, json.dumps(rows).encode())
+    if rows:  # an empty answer may be a gap in the service, so it is not kept
+        _write_atomic(path, json.dumps(rows).encode())
     return exposures
 
 
@@ -88,11 +94,13 @@ def _exposures_for_cell(cell: int) -> list[Exposure]:
 def view(
     ra: float = Query(ge=0, lt=360),
     dec: float = Query(ge=-90, le=90),
-    fov: float = Query(gt=0, le=180),
+    fov: float = Query(gt=0, le=MAX_FOV_DEG),
 ) -> dict:
     cell = cell_of(ra, dec)
     cells = view_cells(ra, dec, fov)
-    centres = {pix: cell_centre(pix) for pix in cells}
+    pixes = sorted(cells)
+    centres = {pix: cell_centre(pix) for pix in pixes}
+    centre_xyz = cell_unit_vectors([centres[pix] for pix in pixes])
     try:
         exposures = _exposures_for_cell(cell)
     except IrsaError as err:
@@ -105,8 +113,8 @@ def view(
     first = first_batch(exposures)
     out = []
     for e in sorted(exposures, key=lambda e: e.mjd):
-        covered = [pix for pix, (cra, cdec) in centres.items()
-                   if footprint_contains(e.footprint, cra, cdec)]
+        mask = cells_covered(e.footprint, centre_xyz)
+        covered = [pix for pix, hit in zip(pixes, mask) if hit]
         out.append({
             "uri": e.uri,
             "obs_id": e.obs_id,
@@ -115,7 +123,7 @@ def view(
             "detector": e.detector,
             "visit": visit_of[e.uri],
             "first": e.uri in first,
-            "cells": sorted(covered),
+            "cells": covered,
         })
     return {
         "cell": cell,
@@ -129,25 +137,35 @@ def view(
 
 
 def _frame_paths(pix: int, uri: str) -> tuple[Path, Path]:
-    base = cache_dir() / "png" / str(pix) / hashlib.sha1(uri.encode()).hexdigest()
+    base = cache_dir() / "png" / str(PATCH_N) / str(pix) / hashlib.sha1(uri.encode()).hexdigest()
     return base.with_suffix(".png"), base.with_suffix(".json")
 
 
 def _render_frame(pix: int, uri: str) -> tuple[bytes, dict]:
+    """Fetch the cutout and render it. A cutout that cannot be rendered is deleted
+    from the cache and reported as CutoutError, so the next request refetches."""
     ra, dec = cell_centre(pix)
     path = fetch_cutout(uri, ra, dec, CROP_DEG)
-    with fits.open(path) as hdul:
-        header = hdul["IMAGE"].header
-        image = science_image(hdul)
-        grid = resample_north_up(image, WCS(header), ra, dec, PATCH_N)
-        wavelength_um, _ = wavelength_at(hdul, ra, dec)
-        meta = {
-            "mjd": float(header["MJD-AVG"]),
-            "detector": int(header["DETECTOR"]),
-            "wavelength_um": wavelength_um,
-            "obs_id": str(header["OBSID"]),
-        }
-    return to_png(grid), meta
+    try:
+        with fits.open(path) as hdul:
+            header = hdul["IMAGE"].header
+            image = science_image(hdul)
+            with warnings.catch_warnings():
+                # astropy complains about SIP coefficients without a -SIP CTYPE on every
+                # frame; applying them is intended.
+                warnings.simplefilter("ignore")
+                grid = resample_north_up(image, WCS(header), ra, dec, PATCH_N)
+                wavelength_um, _ = wavelength_at(hdul, ra, dec)
+            meta = {
+                "mjd": float(header["MJD-AVG"]),
+                "detector": int(header["DETECTOR"]),
+                "wavelength_um": wavelength_um,
+                "obs_id": str(header["OBSID"]),
+            }
+        return to_png(grid), meta
+    except Exception as err:  # corrupt or incomplete file: KeyError, ValueError, OSError, astropy errors
+        Path(path).unlink(missing_ok=True)
+        raise CutoutError(f"Cutout could not be rendered: {err}") from err
 
 
 @app.get("/api/patch/{pix}/frame.png")
