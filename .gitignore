@@ -1,0 +1,10 @@
+data/
+.cache/
+*.fits
+!tests/fixtures/*.fits
+docs/reference/*.pdf
+docs/reference/Expsupp.txt
+.venv/
+__pycache__/
+node_modules/
+.pytest_cache/
