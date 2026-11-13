@@ -40,8 +40,8 @@ def _neighbours(pixels: set[int]) -> set[int]:
 def view_cells(ra: float, dec: float, fov_deg: float) -> dict[int, int]:
     """Map cell to ring for a view centred on (ra, dec) with the given field of view.
 
-    Ring 0: the centre cell plus cells whose centre lies within fov_deg / 2 of the
-    view centre. Ring 1: neighbours of ring 0 not in ring 0. Ring 2: neighbours of
+    Ring 0: the centre cell plus every cell overlapping the circle of radius
+    fov_deg / 2 around the view centre. Ring 1: neighbours of ring 0 not in ring 0. Ring 2: neighbours of
     ring 1 not already listed.
     """
     ring0 = {cell_of(ra, dec)}
