@@ -120,7 +120,9 @@ enforces a global limit of 8 IRSA downloads. Crops already cached are not counte
 against IRSA.
 
 Coverage without extra queries: the TAP query also returns each exposure's footprint
-(`p.poly`). The client tests which patches an exposure covers locally, so neighbouring
+(`p.poly`, hex WKB polygon, SRID 4326, longitudes -180..180). The server tests which
+patch centres each exposure covers and returns that with the view (plan amendment: the
+server, not the client, because it already has astropy and HEALPix), so neighbouring
 patches need no TAP query of their own. A new TAP query runs only when the view centre
 moves into a cell that has not been queried, and its new exposures merge into the
 timeline (see above).
@@ -186,6 +188,8 @@ and differencing are a later design (see "Later").
 - View is north-up (equatorial mount), not alt-az, so motion directions read naturally.
   Not done in the spike; needs checking in the engine.
 - State in the URL hash: ra, dec, fov, step (challenge O7).
+- A coordinate box (RA, Dec in degrees) flies the view there (challenge R2; added
+  while planning).
 
 ### What the user sees (states)
 
