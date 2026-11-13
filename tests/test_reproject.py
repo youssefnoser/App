@@ -72,6 +72,61 @@ def test_nan_input():
     assert np.isfinite(out).any()
 
 
+def test_one_masked_input_pixel_keeps_its_area():
+    """A single masked pixel must not be smeared wider than itself. One native 6.2
+    arcsec pixel covers a 2 x 2 block of the 3.075 arcsec output grid, so four
+    output pixels is lossless; bilinear NaN propagation used to give about nine."""
+    w = synthetic_wcs()
+    img = np.ones((80, 80), dtype=np.float32)
+    img[40, 40] = np.nan
+    out = resample_north_up(img, w, RA0, DEC0, 41)
+    masked_area_px = np.isnan(out).sum() * (SCALE_ARCSEC / NATIVE) ** 2
+    assert abs(masked_area_px - 1.0) < 0.1, masked_area_px
+    finite = out[np.isfinite(out)]
+    assert np.allclose(finite, 1.0), "surviving pixels must keep the input value"
+
+
+def test_nan_does_not_move_the_star():
+    """A bright pixel beside a masked one keeps its flux and its position."""
+    w = synthetic_wcs()
+    clean = bright_at(w, 0, 0)
+    with_hole = clean.copy()
+    with_hole[40, 41] = np.nan
+    a = resample_north_up(clean, w, RA0, DEC0, 41)
+    b = resample_north_up(with_hole, w, RA0, DEC0, 41)
+    assert peak(a) == peak(b)
+    assert abs(np.nanmax(a) - np.nanmax(b)) < 0.2 * np.nanmax(a)
+
+
+def test_majority_masked_stays_nan():
+    w = synthetic_wcs()
+    img = np.ones((80, 80), dtype=np.float32)
+    img[:60, :] = np.nan
+    out = resample_north_up(img, w, RA0, DEC0, 41)
+    assert np.isnan(out[:17, :]).all()
+
+
+def test_all_nan_input_is_all_nan():
+    w = synthetic_wcs()
+    out = resample_north_up(np.full((80, 80), np.nan), w, RA0, DEC0, 41)
+    assert np.isnan(out).all()
+
+
+def test_real_crop_holes_do_not_grow():
+    """Measured earlier: bilinear NaN propagation raised the masked fraction inside the
+    footprint from 2.9% to 8.1%. Resampling must not multiply the holes."""
+    with fits.open(CROP) as hdul:
+        from server.pixels import science_image
+
+        img = science_image(hdul)
+        w = WCS(hdul["IMAGE"].header)
+    native = np.isnan(img).mean()
+    out = resample_north_up(img, w, 269.4463, 4.7677, 211)
+    footprint = out.shape[0] ** 2 - np.isnan(resample_north_up(np.ones_like(img), w, 269.4463, 4.7677, 211)).sum()
+    grown = np.isnan(out).sum() - (out.shape[0] ** 2 - footprint)
+    assert grown / footprint < 1.5 * native, (grown / footprint, native)
+
+
 def test_outside_input_is_nan():
     w = synthetic_wcs()
     out = resample_north_up(np.ones((80, 80), dtype=np.float32), w, RA0, DEC0, 301)
