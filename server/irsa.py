@@ -49,7 +49,9 @@ def decode_footprint(hex_wkb: str) -> tuple[tuple[float, float], ...]:
     (equal to the first) is dropped.
     """
     data = bytes.fromhex(hex_wkb.strip())
-    struct.unpack_from("<BIII", data, 0)  # header: byte order, type, SRID
+    if not data or data[0] != 1:
+        raise ValueError("footprint WKB is not little-endian")
+    struct.unpack_from("<BIII", data, 0)  # header: byte order, type, SRID, ring count
     (count,) = struct.unpack_from("<I", data, 13)
     points = []
     offset = 17
@@ -88,8 +90,8 @@ def parse_tap_csv(text: str) -> list[Exposure]:
 def find_exposures(ra: float, dec: float, *, client: httpx.Client | None = None) -> list[Exposure]:
     """Query IRSA TAP for exposures covering (ra, dec), sorted by mjd.
 
-    Raises IrsaError if the request fails or IRSA answers with an error
-    status. No retries: IRSA is a shared public service.
+    Raises IrsaError if the request fails, IRSA answers with an error
+    status, or the response cannot be parsed. No retries: IRSA is a shared public service.
     """
     own_client = client is None
     client = client if client is not None else make_client()
@@ -107,6 +109,8 @@ def find_exposures(ra: float, dec: float, *, client: httpx.Client | None = None)
         return parse_tap_csv(response.text)
     except httpx.HTTPError as exc:
         raise IrsaError(f"IRSA TAP request failed: {exc}") from exc
+    except (KeyError, ValueError, IndexError, struct.error) as exc:
+        raise IrsaError(f"IRSA TAP response could not be parsed: {exc!r}") from exc
     finally:
         if own_client:
             client.close()
