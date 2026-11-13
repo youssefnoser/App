@@ -1,0 +1,430 @@
+<title>SPHEREx Blink Viewer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: one working surface. Sky canvas on the left with transport under it,
+   readout + spectrum + observation timeline stacked on the right; stacks on phones.
+   Single dark look on purpose: it is an instrument view of infrared images. */
+:root {
+  color-scheme: dark;
+  --bg: #0a0c11;
+  --panel: #11141b;
+  --panel-2: #161a23;
+  --line: #242a37;
+  --fg: #dde2ee;
+  --muted: #8b93a7;
+  --accent: #ffb454;
+  --accent-ink: #1a1203;
+  --ring: #5fe0d6;
+  --d1: #6ea8ff; --d2: #5fd0c5; --d3: #9bd96b; --d4: #f2d45c; --d5: #f59e5b; --d6: #ee6a6a;
+  --font-display: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 14px; line-height: 1.45;
+  padding-block: 20px 32px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 24px; }
+h1 { font-family: var(--font-display); font-weight: 700; font-size: 26px; letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); font-family: var(--font-data); font-size: 12px; }
+.sub b { color: var(--fg); font-weight: 500; }
+
+.grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; min-width: 0; }
+.panel h2 { font-family: var(--font-display); font-weight: 500; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+
+.skywrap { position: relative; background: #000; border: 1px solid var(--line); border-radius: 4px; }
+canvas#sky { display: block; width: 100%; aspect-ratio: 1; height: auto; cursor: crosshair; image-rendering: pixelated; }
+canvas#sky.smooth { image-rendering: auto; }
+.hud { position: absolute; left: 8px; top: 8px; font-family: var(--font-data); font-size: 12px; background: rgba(8,10,14,.72); padding: 3px 7px; border-radius: 3px; pointer-events: none; }
+.hud2 { left: auto; right: 8px; color: var(--muted); }
+
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, select, input[type=range] { font: inherit; }
+button.btn {
+  background: var(--panel-2); color: var(--fg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 6px 12px; cursor: pointer; font-family: var(--font-data); font-size: 12px;
+}
+button.btn:hover { border-color: #3a4358; }
+button.btn[aria-pressed="true"], button.btn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 500; }
+button.btn.play { min-width: 76px; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+button.chip {
+  display: inline-flex; align-items: center; gap: 6px; background: var(--panel-2); border: 1px solid var(--line);
+  color: var(--fg); border-radius: 999px; padding: 4px 10px 4px 8px; cursor: pointer; font-family: var(--font-data); font-size: 12px;
+}
+button.chip i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); display: inline-block; }
+button.chip[aria-pressed="false"] { opacity: .4; }
+button.chip[aria-pressed="false"] i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+.chip small { color: var(--muted); font-size: 11px; }
+
+.scrub { width: 100%; accent-color: var(--accent); margin: 4px 0 0; }
+label.ctl { display: flex; align-items: center; gap: 8px; color: var(--muted); font-family: var(--font-data); font-size: 12px; }
+label.ctl input[type=range] { accent-color: var(--accent); width: 120px; }
+label.ctl input[type=checkbox] { accent-color: var(--accent); }
+
+dl.read { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: 4px 14px; margin: 0; font-family: var(--font-data); font-size: 12.5px; }
+dl.read dt { color: var(--muted); }
+dl.read dd { margin: 0; overflow-wrap: anywhere; }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--muted); font-family: var(--font-data); font-size: 10.5px; }
+svg .axis { stroke: var(--line); stroke-width: 1; }
+svg .grid-l { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 3; opacity: .8; }
+svg .pt { cursor: pointer; }
+.note { color: var(--muted); font-size: 12px; margin: 8px 0 0; max-width: 70ch; }
+.note b { color: var(--fg); font-weight: 500; }
+
+footer { color: var(--muted); font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+footer .links { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+footer a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(255,180,84,.35); }
+footer a:hover { border-bottom-color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>SPHEREx Blink Viewer</h1>
+    <div class="sub" id="subline"></div>
+  </header>
+
+  <div class="grid">
+    <div class="col">
+      <div class="panel">
+        <h2>Sky patch, north up</h2>
+        <div class="skywrap">
+          <canvas id="sky" width="656" height="656" aria-label="SPHEREx image of the selected sky patch"></canvas>
+          <div class="hud" id="hud"></div>
+          <div class="hud hud2" id="hover">hover for values</div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn play" id="play" type="button">Play</button>
+          <button class="btn" id="prev" type="button" aria-label="Previous exposure">&larr;</button>
+          <button class="btn" id="next" type="button" aria-label="Next exposure">&rarr;</button>
+          <label class="ctl">Speed <input id="fps" type="range" min="1" max="20" value="6"><span id="fpsv">6 fps</span></label>
+        </div>
+        <input class="scrub" id="scrub" type="range" min="0" max="0" value="0" aria-label="Exposure in time order">
+        <div class="row" style="margin-top:10px">
+          <span class="sub" style="margin-right:2px">View</span>
+          <button class="btn" data-mode="single" type="button" aria-pressed="true">Single exposure</button>
+          <button class="btn" data-mode="stack" type="button" aria-pressed="false">Stack (motion trail)</button>
+          <button class="btn" data-mode="split" type="button" aria-pressed="false">Early vs late</button>
+        </div>
+        <div class="row" style="margin-top:10px; gap:14px">
+          <label class="ctl">Stretch <input id="stretch" type="range" min="0" max="100" value="45"></label>
+          <label class="ctl"><input id="path" type="checkbox" checked> Predicted position</label>
+          <label class="ctl"><input id="smooth" type="checkbox"> Smooth pixels</label>
+        </div>
+        <p class="note" id="modenote"></p>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="panel">
+        <h2>Detector bands</h2>
+        <div class="row" id="chips"></div>
+        <p class="note">SPHEREx has six detectors. Each one sees a different slice of 0.75 to 5 &micro;m, and the wavelength changes across the array, so the same sky position lands at a different colour in every exposure.</p>
+      </div>
+      <div class="panel">
+        <h2>This exposure</h2>
+        <dl class="read" id="read"></dl>
+      </div>
+      <div class="panel">
+        <h2>Spectrum of the target, measured per exposure</h2>
+        <svg id="spec" viewBox="0 0 520 250" role="img" aria-label="Flux of the target against wavelength"></svg>
+        <p class="note" id="specnote"></p>
+      </div>
+      <div class="panel">
+        <h2>When each detector looked here</h2>
+        <svg id="tl" viewBox="0 0 520 170" role="img" aria-label="Observation dates by detector"></svg>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="links">
+      <a href="https://irsa.ipac.caltech.edu/Missions/spherex.html" target="_blank" rel="noopener">NASA/IPAC IRSA: SPHEREx</a>
+      <a href="https://caltech-ipac.github.io/irsa-tutorials/spherex/" target="_blank" rel="noopener">SPHEREx tutorial notebooks</a>
+      <a href="http://byw.tools/wiseview" target="_blank" rel="noopener">WiseView</a>
+      <a href="https://archive.stsci.edu/missions-and-data/gaia" target="_blank" rel="noopener">Gaia data</a>
+    </div>
+    <div>Data: SPHEREx Level 2 spectral images (IMAGE extension, MJy/sr) from NASA/IPAC IRSA, fetched as cutouts around the target's epoch-corrected position. Each cutout is resampled onto a shared north-up grid of 3.075&Prime; pixels by bilinear interpolation. Gray pixels have no data or were masked by the pipeline. Predicted position uses published proper motion for the target. Flux is the background-subtracted sum inside a 2.5-pixel circle.</div>
+  </footer>
+</div>
+
+<script type="application/json" id="sx-data">/*DATA*/</script>
+<script>
+(function () {
+  var raw = JSON.parse(document.getElementById('sx-data').textContent);
+  var N = raw.N, SC = raw.scale_arcsec, F = raw.frames, NF = F.length;
+  var bin = atob(raw.data), buf = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  var ALL = new Float32Array(buf.buffer);
+  var NPX = N * N;
+
+  var BANDS = {
+    1: ['0.75–1.1', 'var(--d1)'], 2: ['1.1–1.6', 'var(--d2)'], 3: ['1.6–2.4', 'var(--d3)'],
+    4: ['2.4–3.8', 'var(--d4)'], 5: ['3.8–4.4', 'var(--d5)'], 6: ['4.4–5.0', 'var(--d6)']
+  };
+  var css = getComputedStyle(document.documentElement);
+  function cvar(n) { return css.getPropertyValue(n).trim(); }
+  var DCOL = {}; for (var d = 1; d <= 6; d++) DCOL[d] = cvar('--d' + d);
+
+  // Normalised frames: background (median) removed, scaled by the 99.8th percentile.
+  var NORM = new Float32Array(ALL.length);
+  function pct(arr, p) { var a = arr.slice().sort(function (x, y) { return x - y; }); return a.length ? a[Math.min(a.length - 1, Math.floor(p * a.length))] : NaN; }
+  for (var k = 0; k < NF; k++) {
+    var vals = [];
+    for (var j = 0; j < NPX; j++) { var v = ALL[k * NPX + j]; if (v === v) vals.push(v); }
+    var med = pct(vals, 0.5);
+    var sub = vals.map(function (v) { return v - med; });
+    var hi = pct(sub, 0.998); if (!(hi > 0)) hi = 1;
+    F[k].med = med; F[k].hi = hi;
+    for (var j2 = 0; j2 < NPX; j2++) { var w = ALL[k * NPX + j2]; NORM[k * NPX + j2] = (w === w) ? (w - med) / hi : NaN; }
+  }
+
+  var state = { sel: 0, mode: 'single', det: { 1: true, 2: true, 3: true, 4: true, 5: true, 6: true }, playing: false, fps: 6, stretch: 0.45, path: true, smooth: false };
+  // start on a long-wavelength exposure where the star is cleanly measured
+  for (var s = 0; s < NF; s++) { if (F[s].det === 6 && F[s].flux !== null && F[s].mjd > 61050) { state.sel = s; break; } }
+
+  function visible() { var o = []; for (var i = 0; i < NF; i++) if (state.det[F[i].det]) o.push(i); return o; }
+
+  // Inferno-like ramp
+  var STOPS = [[0,0,4],[40,11,84],[101,21,110],[159,42,99],[212,72,66],[245,125,21],[250,193,39],[252,255,164]];
+  function ramp(t) {
+    t = t < 0 ? 0 : t > 1 ? 1 : t; var x = t * (STOPS.length - 1), i = Math.min(STOPS.length - 2, Math.floor(x)), f = x - i, a = STOPS[i], b = STOPS[i + 1];
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+  }
+  function stretchFn() {
+    // slider 0 = nearly linear, 100 = strong asinh that lifts faint structure
+    var soft = Math.pow(10, -0.2 - state.stretch / 100 * 2.3); // 0.63 .. 0.003
+    var den = Math.asinh(1 / soft);
+    return function (x) { return x <= 0 ? 0 : Math.asinh(Math.min(x, 1) / soft) / den; };
+  }
+
+  var cv = document.getElementById('sky'), ctx = cv.getContext('2d');
+  var off = document.createElement('canvas'); off.width = N; off.height = N; var octx = off.getContext('2d');
+  var S = cv.width / N;
+
+  function frameImage(i) { return NORM.subarray(i * NPX, (i + 1) * NPX); }
+  function meanOf(idx) {
+    var out = new Float32Array(NPX), cnt = new Float32Array(NPX);
+    idx.forEach(function (i) { var a = frameImage(i); for (var j = 0; j < NPX; j++) { var v = a[j]; if (v === v) { out[j] += Math.max(v, -0.05); cnt[j]++; } } });
+    var vals = [];
+    for (var j2 = 0; j2 < NPX; j2++) { if (cnt[j2] > 0) { out[j2] /= cnt[j2]; vals.push(out[j2]); } else out[j2] = NaN; }
+    var hi = vals.length ? pct(vals, 0.998) : 1; if (!(hi > 0)) hi = 1;
+    for (var j3 = 0; j3 < NPX; j3++) out[j3] /= hi;
+    return out;
+  }
+
+  function render() {
+    var vis = visible(), id = octx.createImageData(N, N), st = stretchFn(), px = id.data, note = '';
+    if (state.mode === 'single') {
+      var a = frameImage(state.sel);
+      for (var j = 0; j < NPX; j++) {
+        var v = a[j], o = j * 4;
+        if (v !== v) { px[o] = 32; px[o+1] = 36; px[o+2] = 47; px[o+3] = 255; }
+        else { var c = ramp(st(v)); px[o] = c[0]; px[o+1] = c[1]; px[o+2] = c[2]; px[o+3] = 255; }
+      }
+      note = 'One exposure at a time. Each frame has its own background removed and is scaled to its own brightest pixels, so you see position, not brightness. Step through them to watch the target drift.';
+    } else if (state.mode === 'stack') {
+      var m = meanOf(vis);
+      for (var j2 = 0; j2 < NPX; j2++) {
+        var v2 = m[j2], o2 = j2 * 4;
+        if (v2 !== v2) { px[o2] = 32; px[o2+1] = 36; px[o2+2] = 47; px[o2+3] = 255; }
+        else { var c2 = ramp(st(v2)); px[o2] = c2[0]; px[o2+1] = c2[1]; px[o2+2] = c2[2]; px[o2+3] = 255; }
+      }
+      note = 'All ' + vis.length + ' selected exposures averaged. Anything that moved during the year smears into a streak, while fixed stars stay sharp.';
+    } else {
+      var half = Math.floor(vis.length / 2), early = vis.slice(0, half), late = vis.slice(vis.length - half);
+      var e = meanOf(early), l = meanOf(late);
+      for (var j3 = 0; j3 < NPX; j3++) {
+        var o3 = j3 * 4, ev = e[j3], lv = l[j3];
+        if (ev !== ev || lv !== lv) { px[o3] = 32; px[o3+1] = 36; px[o3+2] = 47; px[o3+3] = 255; }
+        else { var te = st(ev) * 255, tl = st(lv) * 255; px[o3] = tl; px[o3+1] = te; px[o3+2] = te; px[o3+3] = 255; }
+      }
+      note = 'Earliest half of the exposures in cyan, latest half in red. Fixed stars come out white. A source that moved shows as a cyan and red pair, joined by its path.';
+    }
+    octx.putImageData(id, 0, 0);
+    ctx.imageSmoothingEnabled = state.smooth;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    // data row 0 is the southern edge, so draw flipped to put north at the top
+    ctx.save(); ctx.translate(0, cv.height); ctx.scale(1, -1);
+    ctx.drawImage(off, 0, 0, cv.width, cv.height);
+    ctx.restore();
+    overlays(vis);
+    document.getElementById('modenote').textContent = note;
+  }
+
+  function overlays(vis) {
+    var f = F[state.sel];
+    function P(x, y) { return [(x + 0.5) * S, (N - (y + 0.5)) * S]; } // y flipped: north is up
+    if (state.path && vis.length) {
+      if (state.mode === 'single') {
+        var p = P(f.tx, f.ty);
+        ctx.strokeStyle = cvar('--ring'); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p[0], p[1], 2.5 * S, 0, 6.2832); ctx.stroke();
+      } else {
+        var a = P(F[vis[0]].tx, F[vis[0]].ty), b = P(F[vis[vis.length - 1]].tx, F[vis[vis.length - 1]].ty);
+        ctx.strokeStyle = cvar('--ring'); ctx.lineWidth = 2; ctx.setLineDash([6, 5]);
+        ctx.beginPath(); ctx.arc(a[0], a[1], 2.5 * S, 0, 6.2832); ctx.stroke();
+        ctx.beginPath(); ctx.arc(b[0], b[1], 2.5 * S, 0, 6.2832); ctx.stroke();
+        ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+        ctx.fillStyle = cvar('--ring'); ctx.font = '500 20px ' + cvar('--font-data');
+        ctx.fillText(F[vis[0]].date.slice(0, 7), a[0] + 2.5 * S + 6, a[1] + 6);
+        ctx.fillText(F[vis[vis.length - 1]].date.slice(0, 7), b[0] + 2.5 * S + 6, b[1] + 6);
+      }
+    }
+    // compass + scale bar
+    // north up, east left (sky orientation)
+    var x0 = 78, y0 = cv.height - 26; ctx.strokeStyle = '#fff'; ctx.fillStyle = '#fff'; ctx.lineWidth = 2; ctx.font = '500 18px ' + cvar('--font-data');
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0, y0 - 46); ctx.moveTo(x0, y0); ctx.lineTo(x0 - 46, y0); ctx.stroke();
+    ctx.fillText('N', x0 - 6, y0 - 52); ctx.fillText('E', x0 - 46 - 20, y0 + 6);
+    var bar = 30 / SC * S, bx = cv.width - 26 - bar, by = cv.height - 26;
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + bar, by); ctx.moveTo(bx, by - 6); ctx.lineTo(bx, by + 6); ctx.moveTo(bx + bar, by - 6); ctx.lineTo(bx + bar, by + 6); ctx.stroke();
+    ctx.fillText('30″', bx + bar / 2 - 18, by - 12);
+    document.getElementById('hud').textContent = state.mode === 'single' ? f.date + '  ·  ' + f.wl.toFixed(2) + ' µm  ·  D' + f.det : vis.length + ' exposures';
+  }
+
+  function readout() {
+    var f = F[state.sel], band = BANDS[f.det];
+    var rows = [
+      ['Date (UTC)', f.date + ' (MJD ' + f.mjd.toFixed(2) + ')'],
+      ['Observation', f.obs || ''],
+      ['Detector', '<span class="swatch" style="background:' + DCOL[f.det] + '"></span>D' + f.det + ', ' + band[0] + ' µm'],
+      ['Wavelength here', f.wl.toFixed(3) + ' µm ± ' + (f.bw / 2).toFixed(3)],
+      ['Target flux', f.flux !== null ? f.flux.toFixed(2) + ' Jy' : 'not measurable, core pixels masked'],
+      ['Position in grid', f.tx.toFixed(1) + ', ' + f.ty.toFixed(1) + ' px']
+    ];
+    document.getElementById('read').innerHTML = rows.map(function (r) { return '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>'; }).join('');
+  }
+
+  // ---------- Spectrum ----------
+  var SPW = 520, SPH = 250, ML = 46, MR = 10, MT = 10, MB = 34;
+  function spectrum() {
+    var svg = document.getElementById('spec'), pts = [];
+    F.forEach(function (f, i) { if (f.flux !== null && f.flux > 0) pts.push([i, f]); });
+    var lo = Infinity, hi = -Infinity; pts.forEach(function (p) { lo = Math.min(lo, p[1].flux); hi = Math.max(hi, p[1].flux); });
+    var yl = Math.floor(Math.log10(lo * 0.9) * 2) / 2, yh = Math.ceil(Math.log10(hi * 1.1) * 2) / 2;
+    function X(w) { return ML + (w - 0.7) / (5.1 - 0.7) * (SPW - ML - MR); }
+    function Y(v) { return MT + (1 - (Math.log10(v) - yl) / (yh - yl)) * (SPH - MT - MB); }
+    var g = '';
+    for (var w = 1; w <= 5; w++) g += '<line class="grid-l" x1="' + X(w) + '" x2="' + X(w) + '" y1="' + MT + '" y2="' + (SPH - MB) + '"/><text x="' + X(w) + '" y="' + (SPH - MB + 15) + '" text-anchor="middle">' + w + '</text>';
+    for (var e = Math.ceil(yl * 2) / 2; e <= yh + 1e-9; e += 0.5) { var v = Math.pow(10, e); g += '<line class="grid-l" x1="' + ML + '" x2="' + (SPW - MR) + '" y1="' + Y(v) + '" y2="' + Y(v) + '"/><text x="' + (ML - 6) + '" y="' + (Y(v) + 3.5) + '" text-anchor="end">' + (v >= 1 ? v.toFixed(v >= 10 ? 0 : 1) : v.toFixed(2)) + '</text>'; }
+    g += '<text x="' + ((ML + SPW - MR) / 2) + '" y="' + (SPH - 4) + '" text-anchor="middle">wavelength (µm)</text>';
+    g += '<text transform="translate(11 ' + ((MT + SPH - MB) / 2) + ') rotate(-90)" text-anchor="middle">flux (Jy)</text>';
+    g += '<line class="axis" x1="' + ML + '" x2="' + ML + '" y1="' + MT + '" y2="' + (SPH - MB) + '"/><line class="axis" x1="' + ML + '" x2="' + (SPW - MR) + '" y1="' + (SPH - MB) + '" y2="' + (SPH - MB) + '"/>';
+    pts.forEach(function (p) {
+      var f = p[1], on = state.det[f.det];
+      g += '<circle class="pt" data-i="' + p[0] + '" cx="' + X(f.wl) + '" cy="' + Y(f.flux) + '" r="3" fill="' + DCOL[f.det] + '" opacity="' + (on ? 0.85 : 0.15) + '"/>';
+    });
+    var cur = F[state.sel];
+    if (cur.flux !== null && cur.flux > 0) g += '<circle cx="' + X(cur.wl) + '" cy="' + Y(cur.flux) + '" r="7" fill="none" stroke="#fff" stroke-width="1.8" pointer-events="none"/>';
+    else g += '<line x1="' + X(cur.wl) + '" x2="' + X(cur.wl) + '" y1="' + MT + '" y2="' + (SPH - MB) + '" stroke="#fff" stroke-width="1.2" stroke-dasharray="3 3" pointer-events="none"/>';
+    svg.innerHTML = g;
+    var mid = pts.filter(function (p) { return p[1].wl > 1.2; }), gapLo = 1.2, gapHi = mid.length ? Math.min.apply(null, mid.map(function (p) { return p[1].wl; })) : 5;
+    document.getElementById('specnote').innerHTML = '<b>' + pts.length + ' of ' + NF + '</b> exposures give a clean flux. Between about ' + gapLo.toFixed(1) + ' and ' + gapHi.toFixed(1) + ' µm the target is so bright that the pipeline masks its core pixels, so no flux is plotted there. Click a point to jump to that exposure.';
+  }
+
+  // ---------- Timeline ----------
+  function timeline() {
+    var svg = document.getElementById('tl'), W = 520, H = 170, ML2 = 34, MR2 = 10, MT2 = 8, MB2 = 26;
+    var t0 = F[0].mjd, t1 = F[NF - 1].mjd, pad = (t1 - t0) * 0.02; t0 -= pad; t1 += pad;
+    function X(m) { return ML2 + (m - t0) / (t1 - t0) * (W - ML2 - MR2); }
+    function Y(d) { return MT2 + (d - 0.5) / 6 * (H - MT2 - MB2); }
+    var g = '';
+    for (var d = 1; d <= 6; d++) g += '<line class="grid-l" x1="' + ML2 + '" x2="' + (W - MR2) + '" y1="' + Y(d) + '" y2="' + Y(d) + '"/><text x="' + (ML2 - 6) + '" y="' + (Y(d) + 3.5) + '" text-anchor="end">D' + d + '</text>';
+    // month ticks every 3 months
+    var dstart = new Date(Date.UTC(1858, 10, 17) + t0 * 864e5), cur = new Date(Date.UTC(dstart.getUTCFullYear(), Math.ceil(dstart.getUTCMonth() / 3) * 3, 1));
+    while (true) {
+      var m = (cur.getTime() - Date.UTC(1858, 10, 17)) / 864e5; if (m > t1) break;
+      if (m >= t0) g += '<line class="grid-l" x1="' + X(m) + '" x2="' + X(m) + '" y1="' + MT2 + '" y2="' + (H - MB2) + '"/><text x="' + X(m) + '" y="' + (H - MB2 + 14) + '" text-anchor="middle">' + cur.toISOString().slice(2, 7) + '</text>';
+      cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + 3, 1));
+    }
+    F.forEach(function (f, i) {
+      g += '<circle class="pt" data-i="' + i + '" cx="' + X(f.mjd) + '" cy="' + Y(f.det) + '" r="2.6" fill="' + DCOL[f.det] + '" opacity="' + (state.det[f.det] ? 0.8 : 0.15) + '"/>';
+    });
+    var c = F[state.sel];
+    g += '<line x1="' + X(c.mjd) + '" x2="' + X(c.mjd) + '" y1="' + MT2 + '" y2="' + (H - MB2) + '" stroke="#fff" stroke-width="1.4" pointer-events="none"/>';
+    svg.innerHTML = g;
+  }
+
+  // ---------- Controls ----------
+  var chips = document.getElementById('chips');
+  chips.innerHTML = [1, 2, 3, 4, 5, 6].map(function (d) {
+    var n = F.filter(function (f) { return f.det === d; }).length;
+    return '<button class="chip" type="button" data-d="' + d + '" aria-pressed="true" style="--c:' + DCOL[d] + '"><i></i>D' + d + ' <small>' + BANDS[d][0] + ' µm · ' + n + '</small></button>';
+  }).join('');
+  chips.addEventListener('click', function (ev) {
+    var b = ev.target.closest('button'); if (!b) return; var d = +b.dataset.d;
+    var on = Object.keys(state.det).filter(function (k) { return state.det[k]; });
+    if (state.det[d] && on.length === 1) return; // keep at least one detector
+    state.det[d] = !state.det[d]; b.setAttribute('aria-pressed', state.det[d]);
+    if (!state.det[F[state.sel].det]) { var v = visible(); state.sel = v[0]; }
+    update();
+  });
+
+  var scrub = document.getElementById('scrub');
+  function syncScrub() { var v = visible(); scrub.max = v.length - 1; scrub.value = Math.max(0, v.indexOf(state.sel)); }
+  scrub.addEventListener('input', function () { var v = visible(); state.sel = v[+scrub.value]; update(true); });
+  function step(dir) { var v = visible(), p = v.indexOf(state.sel); p = (p + dir + v.length) % v.length; state.sel = v[p]; update(); }
+  document.getElementById('next').onclick = function () { step(1); };
+  document.getElementById('prev').onclick = function () { step(-1); };
+
+  var timer = null, playBtn = document.getElementById('play');
+  function setPlay(on) {
+    state.playing = on; playBtn.textContent = on ? 'Pause' : 'Play'; playBtn.classList.toggle('on', on);
+    clearInterval(timer); if (on) timer = setInterval(function () { step(1); }, 1000 / state.fps);
+  }
+  playBtn.onclick = function () { setPlay(!state.playing); };
+  var fpsEl = document.getElementById('fps');
+  fpsEl.oninput = function () { state.fps = +fpsEl.value; document.getElementById('fpsv').textContent = state.fps + ' fps'; if (state.playing) setPlay(true); };
+
+  document.querySelectorAll('[data-mode]').forEach(function (b) {
+    b.onclick = function () {
+      state.mode = b.dataset.mode;
+      document.querySelectorAll('[data-mode]').forEach(function (x) { x.setAttribute('aria-pressed', x === b); });
+      update();
+    };
+  });
+  document.getElementById('stretch').oninput = function (e) { state.stretch = +e.target.value / 100; render(); };
+  document.getElementById('path').onchange = function (e) { state.path = e.target.checked; render(); };
+  document.getElementById('smooth').onchange = function (e) { state.smooth = e.target.checked; cv.classList.toggle('smooth', state.smooth); render(); };
+
+  function pick(ev) {
+    var t = ev.target; if (!t.dataset || t.dataset.i === undefined) return;
+    var i = +t.dataset.i; if (!state.det[F[i].det]) { state.det[F[i].det] = true; chips.querySelector('[data-d="' + F[i].det + '"]').setAttribute('aria-pressed', 'true'); }
+    state.sel = i; if (state.mode !== 'single') { state.mode = 'single'; document.querySelectorAll('[data-mode]').forEach(function (x) { x.setAttribute('aria-pressed', x.dataset.mode === 'single'); }); }
+    update();
+  }
+  document.getElementById('spec').addEventListener('click', pick);
+  document.getElementById('tl').addEventListener('click', pick);
+
+  cv.addEventListener('mousemove', function (ev) {
+    var r = cv.getBoundingClientRect(), x = Math.floor((ev.clientX - r.left) / r.width * N), yd = Math.floor((ev.clientY - r.top) / r.height * N), y = N - 1 - yd;
+    if (x < 0 || yd < 0 || x >= N || yd >= N) return;
+    var v = ALL[state.sel * NPX + y * N + x], dx = -(x - (N - 1) / 2) * SC, dy = (y - (N - 1) / 2) * SC; // east is left (low x), north is up (high data y)
+    document.getElementById('hover').textContent = (v === v ? v.toFixed(1) + ' MJy/sr' : 'masked') + '  ·  ' + (dx >= 0 ? '+' : '') + dx.toFixed(0) + '″ E, ' + (dy >= 0 ? '+' : '') + dy.toFixed(0) + '″ N';
+  });
+  cv.addEventListener('mouseleave', function () { document.getElementById('hover').textContent = 'hover for values'; });
+  document.addEventListener('keydown', function (e) {
+    if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+    if (e.key === 'ArrowRight' && e.target !== scrub) { step(1); } else if (e.key === 'ArrowLeft' && e.target !== scrub) { step(-1); } else if (e.key === ' ' && e.target.tagName !== 'BUTTON') { e.preventDefault(); setPlay(!state.playing); }
+  });
+
+  function update(fromScrub) { if (!fromScrub) syncScrub(); render(); readout(); spectrum(); timeline(); }
+
+  var first = F[0].date, last = F[NF - 1].date;
+  document.getElementById('subline').innerHTML = '<b>' + raw.title + '</b> · ' + raw.fov + '″ field · <b>' + NF + '</b> exposures · ' + first + ' to ' + last;
+  update();
+})();
+</script>
