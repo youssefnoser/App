@@ -66,8 +66,14 @@ const app = {
 };
 window.app = app;
 
-const frameUrl = (pix, uri) =>
-  new URL(`/api/patch/${pix}/frame.png?uri=${encodeURIComponent(uri)}`, location.href).href;
+// A view in stack mode names, per exposure, the cell whose exposure list defines its
+// visit median. The same uri then always maps to the same image address.
+const stackOf = new Map();
+const frameUrl = (pix, uri) => {
+  const stack = stackOf.has(uri) ? `&stack=${stackOf.get(uri)}` : '';
+  return new URL(`/api/patch/${pix}/frame.png?uri=${encodeURIComponent(uri)}${stack}`,
+    location.href).href;
+};
 
 const round = (x, digits) => Number(x.toFixed(digits));
 
@@ -169,7 +175,7 @@ async function requestView(centre, fov) {
   viewAbort = controller;
   app.viewState = 'finding';
   render();
-  const qs = `ra=${round(centre.ra, 5)}&dec=${round(centre.dec, 5)}&fov=${round(viewFov, 4)}`;
+  const qs = `ra=${round(centre.ra, 5)}&dec=${round(centre.dec, 5)}&fov=${round(viewFov, 4)}&stack=1`;
   let view;
   try {
     const res = await fetch(`/api/view?${qs}`, { signal: controller.signal });
@@ -191,6 +197,9 @@ function applyView(view) {
   app.view = view;
   app.viewState = 'ready';
   for (const c of view.cells) app.centres.set(c.pix, { ra: c.ra, dec: c.dec });
+  for (const e of view.exposures) {
+    if (e.stack != null && !stackOf.has(e.uri)) stackOf.set(e.uri, e.stack);
+  }
 
   const newSteps = buildSteps(view.exposures);
   const index = app.steps.length ? keepStep(app.steps, newSteps, app.stepIndex) : 0;
@@ -305,8 +314,11 @@ function render() {
   if (step && stepHasFrames(app.stepIndex)) {
     const meta = metaFor(step.uri);
     const wl = meta ? `, ${meta.wavelength_um.toFixed(2)} micron` : '';
+    const what = meta && meta.stack
+      ? `Median of ${meta.stack} exposures around ${step.date}`
+      : step.date;
     info = `Frame ${loaded.indexOf(app.stepIndex) + 1} of ${loaded.length} loaded. ` +
-      `${step.date}, detector ${step.detector}${wl}.`;
+      `${what}, detector ${step.detector}${wl}.`;
   } else if (loaded.length) {
     info = `${loaded.length} frames loaded. This step has none on screen.`;
   }

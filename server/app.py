@@ -12,7 +12,10 @@ import json
 import os
 import tempfile
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import numpy as np
 
 from astropy.io import fits
 from astropy.time import Time
@@ -33,6 +36,7 @@ from server.patches import (
     cell_of,
     cell_unit_vectors,
     cells_covered,
+    footprint_contains,
     view_cells,
 )
 from server.pixels import science_image
@@ -125,7 +129,14 @@ def view(
     ra: float = Query(ge=0, lt=360),
     dec: float = Query(ge=-90, le=90),
     fov: float = Query(gt=0, le=MAX_FOV_DEG),
+    stack: bool = Query(False),
 ) -> dict:
+    """Patches and exposures for a view.
+
+    With `stack=1` only the first-batch exposures are listed, and each stands for
+    the median of every exposure of its visit and detector (see `_render_stack`):
+    its `cells` are the patches any of those exposures covers.
+    """
     cell = cell_of(ra, dec)
     cells = view_cells(ra, dec, fov)
     pixes = sorted(cells)
@@ -141,13 +152,22 @@ def view(
         for e in visit:
             visit_of[e.uri] = index
     first = first_batch(exposures)
-    if pixel_source() == "aws":
+    if pixel_source() == "aws" and not stack:
         prefetch(sorted(first))
+    groups: dict[tuple[int, int], list[Exposure]] = {}
+    for e in exposures:
+        groups.setdefault((visit_of[e.uri], e.detector), []).append(e)
     out = []
     for e in sorted(exposures, key=lambda e: e.mjd):
-        mask = cells_covered(e.footprint, centre_xyz)
+        if stack and e.uri not in first:
+            continue
+        members = groups[(visit_of[e.uri], e.detector)] if stack else [e]
+        mask = cells_covered(members[0].footprint, centre_xyz)
+        for other in members[1:]:
+            mask = mask | cells_covered(other.footprint, centre_xyz)
         covered = [pix for pix, hit in zip(pixes, mask) if hit]
         out.append({
+            **({"stack": cell, "count": len(members)} if stack else {}),
             "uri": e.uri,
             "obs_id": e.obs_id,
             "mjd": e.mjd,
@@ -168,11 +188,11 @@ def view(
     }
 
 
-def _frame_paths(pix: int, uri: str) -> tuple[Path, Path]:
+def _frame_paths(pix: int, uri: str, kind: str = "") -> tuple[Path, Path]:
     base = (
         cache_dir()
         / "png"
-        / f"v{RENDER_VERSION}"
+        / f"v{RENDER_VERSION}{kind}"
         / str(PATCH_N)
         / str(pix)
         / hashlib.sha1(uri.encode()).hexdigest()
@@ -242,8 +262,75 @@ def render_frame_cached(pix: int, uri: str) -> tuple[bytes, dict]:
     return png, meta
 
 
+def _stack_members(cell: int, uri: str) -> list[Exposure]:
+    """Every exposure of the same visit and detector as `uri`, from `cell`'s list."""
+    for visit in group_visits(_exposures_for_cell(cell)):
+        detector = next((e.detector for e in visit if e.uri == uri), None)
+        if detector is not None:
+            return [e for e in visit if e.detector == detector]
+    return []
+
+
+def _render_stack(pix: int, uri: str, cell: int) -> tuple[bytes, dict]:
+    """Median of one patch over every exposure of `uri`'s visit and detector.
+
+    Each exposure is cut and resampled like a single frame, then the per-pixel
+    median ignores NaN, so a pixel blanked in some exposures is filled by the
+    others and stays NaN only where every exposure is blank. Exposures that do not
+    reach the patch or cannot be fetched are left out; with none left it raises
+    CutoutError. The wavelength reported is the median over the exposures: a stack
+    mixes the wavelengths one detector sees at this position.
+    """
+    ra, dec = cell_centre(pix)
+    members = [e for e in _stack_members(cell, uri) if footprint_contains(e.footprint, ra, dec)]
+
+    def one(e: Exposure):
+        try:
+            frame = open_frame(fetch_exposure(e.uri))
+            image, origin = frame.science_crop(ra, dec, CROP_DEG)
+            with frame.lock:
+                grid = resample_north_up(image, frame.sky, ra, dec, PATCH_N, origin=origin)
+            return grid, frame.wavelength(ra, dec)[0], frame.meta
+        except CutoutError:
+            return None
+
+    with ThreadPoolExecutor(8) as pool:
+        done = [r for r in pool.map(one, members) if r is not None]
+    if not done:
+        raise CutoutError("No exposure of this visit reaches the patch.")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pixels stay NaN
+        median = np.nanmedian(np.stack([d[0] for d in done]), axis=0)
+    times = sorted(d[2]["mjd"] for d in done)
+    meta = {
+        "mjd": float(np.median(times)),
+        "mjd_first": times[0],
+        "mjd_last": times[-1],
+        "detector": done[0][2]["detector"],
+        "wavelength_um": float(np.median([d[1] for d in done])),
+        "obs_id": "",
+        "stack": len(done),
+    }
+    return to_png(median.astype(np.float32)), meta
+
+
+def render_stack_cached(pix: int, uri: str, cell: int) -> tuple[bytes, dict]:
+    """As `render_frame_cached`, for the visit median."""
+    png_path, meta_path = _frame_paths(pix, uri, kind=f"-stack/{cell}")
+    try:
+        return png_path.read_bytes(), json.loads(meta_path.read_text())
+    except (OSError, ValueError):
+        pass
+    png, meta = _render_stack(pix, uri, cell)
+    _write_atomic(meta_path, json.dumps(meta).encode())
+    _write_atomic(png_path, png)
+    return png, meta
+
+
 @app.get("/api/patch/{pix}/frame.png")
-def patch_frame(pix: int, uri: str = Query()) -> Response:
+def patch_frame(
+    pix: int, uri: str = Query(), stack: int | None = Query(None, ge=0, lt=NPIX)
+) -> Response:
     if not 0 <= pix < NPIX:
         raise HTTPException(422, f"Patch number must be between 0 and {NPIX - 1}.")
     try:
@@ -252,7 +339,12 @@ def patch_frame(pix: int, uri: str = Query()) -> Response:
         raise HTTPException(422, "That is not a SPHEREx file path.") from err
 
     try:
-        png, meta = render_frame_cached(pix, uri)
+        if stack is None:
+            png, meta = render_frame_cached(pix, uri)
+        else:
+            png, meta = render_stack_cached(pix, uri, stack)
+    except IrsaError as err:
+        raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
     except CutoutError as err:
         raise HTTPException(502, "The SPHEREx archive (IRSA) did not return this frame. Try again.") from err
     return Response(

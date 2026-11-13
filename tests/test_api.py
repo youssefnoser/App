@@ -351,3 +351,66 @@ def test_targets_lists_the_five_with_todays_positions(client):
     # J2000 dec 4.6934 plus 10.36 arcsec/yr for about 27 years: north of 4.76.
     assert 4.76 < barnard["dec"] < 4.78
     assert all(0 <= t["ra"] < 360 and -90 <= t["dec"] <= 90 for t in body)
+
+
+# --- visit medians (stack mode) ---
+
+
+def test_view_stack_lists_one_entry_per_visit_and_detector(client, monkeypatch, exposures):
+    patch_find(monkeypatch, exposures)
+    plain = client.get(VIEW).json()
+    body = client.get(VIEW + "&stack=1").json()
+    assert len(body["exposures"]) == 18
+    assert all(e["first"] and e["stack"] == body["cell"] for e in body["exposures"])
+    assert sum(e["count"] for e in body["exposures"]) == len(plain["exposures"])
+    # a stack covers at least the patches its own exposure covers
+    by_uri = {e["uri"]: set(e["cells"]) for e in plain["exposures"]}
+    assert all(by_uri[e["uri"]] <= set(e["cells"]) for e in body["exposures"])
+
+
+def test_stack_frame_is_the_nan_ignoring_median(aws_client, monkeypatch, tmp_path):
+    """Three copies of the fixture, one scaled and one with a hole: the median is the
+    plain frame and the hole is filled."""
+    import numpy as np
+    from astropy.io import fits
+    from PIL import Image
+    import io
+
+    from server.irsa import Exposure
+
+    src = FIXTURES / "crop_barnard_D6_2026-03-19.fits"
+    point = (269.4463, 4.7677)
+    monkeypatch.setattr(app_module, "cell_centre", lambda pix: point)
+    square = ((269.0, 4.0), (270.0, 4.0), (270.0, 5.5), (269.0, 5.5))
+    files = {}
+    for name, scale, hole in (("a", 1.0, False), ("b", 3.0, False), ("c", 1.0, True)):
+        path = tmp_path / f"{name}.fits"
+        with fits.open(src) as hdul:
+            hdul["IMAGE"].data = hdul["ZODI"].data + (hdul["IMAGE"].data - hdul["ZODI"].data) * scale
+            if hole:
+                hdul["IMAGE"].data[:] = np.nan
+            hdul.writeto(path)
+        files[f"ibe/data/spherex/{name}.fits"] = path
+    members = [Exposure(u, 61000.0 + i, 6, "o", square) for i, u in enumerate(files)]
+    monkeypatch.setattr(app_module, "_exposures_for_cell", lambda cell: members)
+    monkeypatch.setattr(app_module, "fetch_exposure", lambda uri: files[uri])
+
+    uri = "ibe/data/spherex/a.fits"
+    single = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={uri}")
+    stacked = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={uri}&stack={CELL}")
+    assert stacked.status_code == 200
+    meta = json.loads(stacked.headers["x-frame-meta"])
+    assert meta["stack"] == 3 and meta["detector"] == 6
+    # median of (x, 3x, NaN) is 2x where x is finite: brighter than the single frame, never darker
+    a = np.asarray(Image.open(io.BytesIO(single.content)).convert("LA"), dtype=int)
+    b = np.asarray(Image.open(io.BytesIO(stacked.content)).convert("LA"), dtype=int)
+    seen = (a[..., 1] > 0) & (b[..., 1] > 0)
+    assert seen.sum() > 100
+    assert (b[..., 1] > 0).sum() >= (a[..., 1] > 0).sum()
+    assert np.all(b[..., 0][seen] >= a[..., 0][seen] - 1)
+
+
+def test_stack_frame_with_no_covering_exposure_is_502(aws_client, monkeypatch):
+    monkeypatch.setattr(app_module, "_exposures_for_cell", lambda cell: [])
+    r = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}&stack={CELL}")
+    assert r.status_code == 502
