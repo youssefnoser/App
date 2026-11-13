@@ -29,6 +29,8 @@ from server.irsa import parse_tap_csv
 ASYNC_URL = "https://irsa.ipac.caltech.edu/TAP/async"
 FIRST_MJD = 60790.0  # late April 2025, before the first survey exposures
 MAXREC = 10_000_000
+# Any other phase (ERROR, ABORTED, CANCELLED, a 404 page) means the job is gone.
+WAITING_PHASES = ("PENDING", "QUEUED", "EXECUTING", "HELD", "SUSPENDED", "UNKNOWN")
 QUERY = """SELECT a.uri, p.time_bounds_lower, p.energy_bandpassname, p.obs_publisher_did, p.poly
 FROM spherex.artifact a JOIN spherex.plane p ON a.planeid = p.planeid
 WHERE p.time_bounds_lower >= {lo} AND p.time_bounds_lower < {hi}"""
@@ -115,7 +117,7 @@ def main() -> int:
                         note += " HIT THE ROW LIMIT, use a smaller --days"
                     log(f"window {lo:.0f}-{hi:.0f}: {stored} exposures stored{note}")
                     del running[lo]
-                elif phase in ("ERROR", "ABORTED") or phase.startswith("<") or not phase:
+                elif phase not in WAITING_PHASES:
                     # A lost or failed job: forget it so the next pass queues a new one.
                     detail = ask(client, "GET", f"{job}/error", args.poll).text[:200]
                     log(f"window {lo:.0f}-{hi:.0f}: job {phase[:20]!r}: {detail!r}; queuing again")
