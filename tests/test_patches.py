@@ -51,3 +51,10 @@ def test_footprint_wraps_ra0():
     assert footprint_contains(fp, 0.0, 0.0)
     assert footprint_contains(fp, 359.9, 0.5)
     assert not footprint_contains(fp, 2.0, 0.0)
+
+
+def test_ring0_is_overlap():
+    cells = view_cells(*BARNARD, 0.15)
+    ring0 = {p for p, r in cells.items() if r == 0}
+    assert len(ring0) >= 2
+    assert (ring0 - {2034010}) <= NEIGHBOURS
