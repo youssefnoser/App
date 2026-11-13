@@ -69,20 +69,28 @@ def _obs_id(obs_publisher_did: str) -> str:
     return obs_publisher_did.split("?", 1)[1].split("/", 1)[0]
 
 
-def parse_tap_csv(text: str) -> list[Exposure]:
-    """Parse the TAP csv response into Exposures, sorted by mjd."""
+def parse_tap_csv(text: str, skip_bad: bool = False) -> list[Exposure]:
+    """Parse the TAP csv response into Exposures, sorted by mjd.
+
+    A row that cannot be parsed raises, unless `skip_bad` is True (bulk snapshots,
+    where one odd row should not lose the other thousands); then it is dropped.
+    """
     rows = csv.DictReader(io.StringIO(text))
     exposures = []
     for row in rows:
-        exposures.append(
-            Exposure(
-                uri=row["uri"],
-                mjd=float(row["time_bounds_lower"]),
-                detector=int(row["energy_bandpassname"].split("-D")[-1]),
-                obs_id=_obs_id(row["obs_publisher_did"]),
-                footprint=decode_footprint(row["poly"]),
+        try:
+            exposures.append(
+                Exposure(
+                    uri=row["uri"],
+                    mjd=float(row["time_bounds_lower"]),
+                    detector=int(row["energy_bandpassname"].split("-D")[-1]),
+                    obs_id=_obs_id(row["obs_publisher_did"]),
+                    footprint=decode_footprint(row["poly"]),
+                )
             )
-        )
+        except (KeyError, ValueError, IndexError, TypeError, struct.error):
+            if not skip_bad:
+                raise
     exposures.sort(key=lambda e: e.mjd)
     return exposures
 

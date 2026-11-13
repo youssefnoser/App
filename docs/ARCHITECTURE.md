@@ -44,8 +44,8 @@ Sorted by `mjd`. `count` 0 returns 200 with an empty list. 422 for invalid `ra`/
 ### `GET /api/frame?uri=<uri>&ra=<deg>&dec=<deg>&fov=<arcsec>[&mask=1]`
 
 200 `application/octet-stream`: `n*n` little-endian float32, row-major, NaN for no data, units MJy/sr.
-Pixels are the science image `IMAGE - ZODI`. With `mask=1` (default) pixels with bad-pixel flags are NaN (list in `docs/DATA.md`);
-`mask=0` returns them unmasked, useful for very bright stars whose core is otherwise blanked.
+Pixels are the science image `IMAGE - ZODI`; which flags mask a pixel is decided by the two-mask rule in `docs/DATA.md` (unusable
+bits, plus TRANSIENT/SUR_ERROR only away from saturation), so a bright star keeps its core.
 Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6,"wavelength_um":4.55,
 "bandwidth_um":0.036,"obs_id":"2026W12_1A_0598_1"}`.
 `uri` must match `^ibe/data/spherex/[A-Za-z0-9_./-]+\.fits$`, otherwise 422. This stops the server fetching arbitrary URLs.
@@ -64,14 +64,23 @@ Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6
 | `server/targets.py` | `TARGETS`, `propagate()` |
 | `server/irsa.py` | `find_exposures()` |
 | `server/cutouts.py` | `fetch_cutout()` |
-| `server/pixels.py` | `science_image()` (IMAGE minus ZODI, bad-pixel masking), `BAD_PIXEL_MASK` |
-| `server/reproject.py` | `reproject_frame()` |
-| `server/app.py` | routes |
+| `server/mirror.py` | `fetch_exposure()` (whole file from the AWS mirror, trimmed, LRU cache with a size cap), `cut()` (local crop), `prefetch()` |
+| `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()` |
+| `scripts/snapshot_metadata.py` | fill the snapshot from IRSA TAP in time windows, resumable (network) |
+| `server/footprint.py` | `exposure_from_head()`: time, detector, obs id and footprint from a file's first 28,800 bytes (hand-parsed TAN + SIP) |
+| `scripts/snapshot_from_aws.py` | fill the snapshot from the AWS mirror alone: list the bucket, read each file's header, resumable (network) |
+| `server/pixels.py` | `science_image()` (IMAGE minus ZODI, saturation-aware masking), `masked_pixels()`, `BAD_PIXEL_MASK`, `HARD_PIXEL_MASK` |
+| `server/reproject.py` | `resample_north_up()` (NaN-aware north-up resampling), `wavelength_at()` |
+| `server/app.py` | routes, `render_frame_cached()`, `RENDER_VERSION` in the PNG cache path |
+| `scripts/resolve_targets.py` | one-off: SIMBAD positions and proper motions, cross-checked against Gaia DR3 |
+| `scripts/check_targets.py` | exposure counts per challenge target (network) |
+| `scripts/prewarm.py` | warm every frame the browser would request, and report the cost (network on a cold cache) |
+| `scripts/compare_masks.py` | archive-mask versus page-mask contact sheet, for judging a render change |
 | `web/index.html`, `web/css/app.css` | page shell |
 | `web/js/state.js` | hash parse/serialise |
 | `web/js/stretch.js` | pixel to colour |
 | `web/js/windows.js` | time-window grouping and stacking |
 | `web/js/loader.js` | progressive frame loading |
 | `web/js/app.js` | wiring, blink player |
-| `tests/` | pytest (server), `web/test/` node:test (frontend) |
+| `tests/` | pytest (server), `web/test/` node:test (frontend); `tests/test_targets.py` covers the five targets |
 | `prototype/` | throwaway scripts that proved the pipeline. Read, copy ideas, do not import. |

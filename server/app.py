@@ -21,8 +21,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
+from server.catalog import catalog
 from server.cutouts import CutoutError, cache_dir, check_uri, fetch_cutout
 from server.irsa import Exposure, IrsaError, find_exposures
+from server.mirror import fetch_exposure, open_frame, prefetch
 from server.patches import (
     CROP_DEG,
     NPIX,
@@ -35,6 +37,7 @@ from server.patches import (
 )
 from server.pixels import science_image
 from server.render import to_png
+from server.targets import TARGETS, propagate
 from server.reproject import resample_north_up, wavelength_at
 from server.timeline import first_batch, group_visits
 
@@ -46,12 +49,33 @@ WEB_DIR = ROOT / "web"
 # Frames only load below 0.5 deg; allow a 2x margin (ruling R14).
 MAX_FOV_DEG = 1.0
 
+# Bump when a change alters rendered pixels, so a warmed cache cannot keep serving
+# the old look. 2: NaN-aware resampling and the saturation-aware pixel mask.
+RENDER_VERSION = 2
+
 app = FastAPI(title="SPHEREx Blink")
+
+
+def pixel_source() -> str:
+    """Where pixels come from: "aws" (whole files from the mirror, cut here; the
+    default) or "irsa" (one cutout request per patch). Set with SPHEREX_SOURCE."""
+    return "irsa" if os.environ.get("SPHEREX_SOURCE", "aws").lower() == "irsa" else "aws"
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/targets")
+def targets() -> list[dict]:
+    """The five challenge test targets at today's position (proper motion applied)."""
+    now = float(Time.now().mjd)
+    out = []
+    for key, target in TARGETS.items():
+        ra, dec = propagate(target, now)
+        out.append({"key": key, "name": target.name, "ra": round(ra, 5), "dec": round(dec, 5)})
+    return out
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
@@ -68,7 +92,8 @@ def _write_atomic(path: Path, data: bytes) -> None:
 
 
 def _exposures_for_cell(cell: int) -> list[Exposure]:
-    """Exposures covering the cell centre, from the disk cache or IRSA TAP."""
+    """Exposures covering the cell centre: per-cell disk cache, then the local
+    snapshot (server/catalog.py), then IRSA TAP."""
     path = cache_dir() / "tap" / f"{cell}.json"
     try:
         rows = json.loads(path.read_text())
@@ -79,7 +104,12 @@ def _exposures_for_cell(cell: int) -> list[Exposure]:
         ]
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    exposures = find_exposures(*cell_centre(cell))
+    snapshot = catalog()
+    exposures = snapshot.find(*cell_centre(cell))
+    if exposures is None or not snapshot.complete:
+        # No local snapshot, or it is still being filled (its answer may be
+        # missing exposures): ask IRSA.
+        exposures = find_exposures(*cell_centre(cell))
     rows = [
         {"uri": e.uri, "mjd": e.mjd, "detector": e.detector, "obs_id": e.obs_id,
          "footprint": [list(p) for p in e.footprint]}
@@ -111,6 +141,8 @@ def view(
         for e in visit:
             visit_of[e.uri] = index
     first = first_batch(exposures)
+    if pixel_source() == "aws":
+        prefetch(sorted(first))
     out = []
     for e in sorted(exposures, key=lambda e: e.mjd):
         mask = cells_covered(e.footprint, centre_xyz)
@@ -137,13 +169,38 @@ def view(
 
 
 def _frame_paths(pix: int, uri: str) -> tuple[Path, Path]:
-    base = cache_dir() / "png" / str(PATCH_N) / str(pix) / hashlib.sha1(uri.encode()).hexdigest()
+    base = (
+        cache_dir()
+        / "png"
+        / f"v{RENDER_VERSION}"
+        / str(PATCH_N)
+        / str(pix)
+        / hashlib.sha1(uri.encode()).hexdigest()
+    )
     return base.with_suffix(".png"), base.with_suffix(".json")
 
 
+def _render_from_mirror(pix: int, uri: str) -> tuple[bytes, dict]:
+    """Render one patch from a whole exposure held in the mirror cache."""
+    ra, dec = cell_centre(pix)
+    frame = open_frame(fetch_exposure(uri))
+    try:
+        image, origin = frame.science_crop(ra, dec, CROP_DEG)
+        with frame.lock:
+            grid = resample_north_up(image, frame.sky, ra, dec, PATCH_N, origin=origin)
+        wavelength_um, _ = frame.wavelength(ra, dec)
+        return to_png(grid), {**frame.meta, "wavelength_um": wavelength_um}
+    except CutoutError:
+        raise
+    except Exception as err:
+        raise CutoutError(f"Frame could not be rendered: {err}") from err
+
+
 def _render_frame(pix: int, uri: str) -> tuple[bytes, dict]:
-    """Fetch the cutout and render it. A cutout that cannot be rendered is deleted
+    """Get the crop and render it. An IRSA cutout that cannot be rendered is deleted
     from the cache and reported as CutoutError, so the next request refetches."""
+    if pixel_source() == "aws":
+        return _render_from_mirror(pix, uri)
     ra, dec = cell_centre(pix)
     path = fetch_cutout(uri, ra, dec, CROP_DEG)
     try:
@@ -168,6 +225,23 @@ def _render_frame(pix: int, uri: str) -> tuple[bytes, dict]:
         raise CutoutError(f"Cutout could not be rendered: {err}") from err
 
 
+def render_frame_cached(pix: int, uri: str) -> tuple[bytes, dict]:
+    """PNG bytes and metadata for one patch and one exposure, from disk when warm.
+
+    Shared by the HTTP route and `scripts/prewarm.py`, so a prewarmed frame is
+    byte-identical to one fetched by the browser.
+    """
+    png_path, meta_path = _frame_paths(pix, uri)
+    try:
+        return png_path.read_bytes(), json.loads(meta_path.read_text())
+    except (OSError, ValueError):
+        pass
+    png, meta = _render_frame(pix, uri)
+    _write_atomic(meta_path, json.dumps(meta).encode())
+    _write_atomic(png_path, png)
+    return png, meta
+
+
 @app.get("/api/patch/{pix}/frame.png")
 def patch_frame(pix: int, uri: str = Query()) -> Response:
     if not 0 <= pix < NPIX:
@@ -177,16 +251,10 @@ def patch_frame(pix: int, uri: str = Query()) -> Response:
     except ValueError as err:
         raise HTTPException(422, "That is not a SPHEREx file path.") from err
 
-    png_path, meta_path = _frame_paths(pix, uri)
     try:
-        png, meta = png_path.read_bytes(), json.loads(meta_path.read_text())
-    except (OSError, ValueError):
-        try:
-            png, meta = _render_frame(pix, uri)
-        except CutoutError as err:
-            raise HTTPException(502, "IRSA did not return this frame. Try again.") from err
-        _write_atomic(meta_path, json.dumps(meta).encode())
-        _write_atomic(png_path, png)
+        png, meta = render_frame_cached(pix, uri)
+    except CutoutError as err:
+        raise HTTPException(502, "The SPHEREx archive (IRSA) did not return this frame. Try again.") from err
     return Response(
         png,
         media_type="image/png",
