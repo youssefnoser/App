@@ -245,7 +245,11 @@ class Frame:
             header = hdul["IMAGE"].header
             self.shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
             self.meta = {
+                # mjd is the average (MJD-AVG); start and end are MJD-BEG and
+                # MJD-END. A blink sorts by start, the header keeps all three.
                 "mjd": float(header["MJD-AVG"]),
+                "mjd_start": float(header["MJD-BEG"]),
+                "mjd_end": float(header["MJD-END"]),
                 "detector": int(header["DETECTOR"]),
                 "obs_id": str(header["OBSID"]),
             }

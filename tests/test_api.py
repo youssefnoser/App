@@ -62,6 +62,10 @@ def test_view_shape(client, monkeypatch, exposures):
     out = body["exposures"]
     assert len(out) == len(exposures)
     assert [e["mjd"] for e in out] == sorted(e["mjd"] for e in out)
+    # `mjd` is the exposure start (TAP time_bounds_lower); MJD-AVG is not in this
+    # response. Date is derived from the same start time.
+    for e in out:
+        assert e["mjd_start"] == e["mjd"]
     assert sum(e["first"] for e in out) == len(first_batch(exposures))
     for e in out:
         date.fromisoformat(e["date"])
@@ -176,8 +180,10 @@ def test_frame_png(client, monkeypatch, tmp_path):
     assert img.size == (PATCH_N, PATCH_N)
     meta = json.loads(r.headers["x-frame-meta"])
     assert meta["detector"] == 6
-    assert set(meta) == {"mjd", "detector", "wavelength_um", "obs_id"}
+    assert set(meta) == {"mjd", "mjd_start", "mjd_end", "detector", "wavelength_um", "obs_id"}
     assert meta["wavelength_um"] > 0
+    assert meta["mjd_start"] > 61000 and meta["mjd_end"] > meta["mjd_start"]
+    assert meta["mjd_start"] <= meta["mjd"] <= meta["mjd_end"]
     assert len(calls) == 1
     ra, dec = cell_centre(CELL)
     assert calls[0][0] == GOOD_URI
@@ -414,6 +420,22 @@ def test_stack_frame_with_no_covering_exposure_is_502(aws_client, monkeypatch):
     monkeypatch.setattr(app_module, "_exposures_for_cell", lambda cell: [])
     r = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}&stack={CELL}")
     assert r.status_code == 502
+
+
+def test_stack_param_must_match_exposure_visit(aws_client, monkeypatch):
+    """stack=X is only valid when the uri's visit actually covers cell X."""
+    from server.irsa import Exposure
+    square = ((269.0, 4.0), (270.0, 4.0), (270.0, 5.5), (269.0, 5.5))
+    e = Exposure(GOOD_URI, 61000.0, 6, "o", square)
+    other = Exposure("ibe/data/spherex/other.fits", 61000.0, 6, "o", square)
+    # the wrong cell holds a different exposure: the uri does not belong to it
+    monkeypatch.setattr(
+        app_module, "_exposures_for_cell",
+        lambda cell: [e] if cell == CELL else [other])
+    wrong_cell = CELL + 1
+    r = aws_client.get(f"/api/patch/{wrong_cell}/frame.png?uri={GOOD_URI}&stack={wrong_cell}")
+    assert r.status_code == 422
+    assert "stack" in r.text.lower()
 
 
 # --- live sequence: one image per exposure, read by byte ranges ---

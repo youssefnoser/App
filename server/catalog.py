@@ -104,6 +104,7 @@ class Catalog:
         self._centres = np.zeros((0, 3))
         self._cos_radius = np.zeros(0)
         self.complete = False
+        self.through_mjd: float | None = None
 
     def _load(self) -> bool:
         try:
@@ -117,6 +118,10 @@ class Catalog:
         try:
             data = conn.execute("SELECT id, cx, cy, cz, radius_deg FROM exposures").fetchall()
             self.complete = get_meta(conn, "complete") == "1"
+            try:
+                self.through_mjd = float(get_meta(conn, "through_mjd"))
+            except (TypeError, ValueError):
+                self.through_mjd = None
         except sqlite3.Error:
             return False
         finally:
@@ -127,6 +132,18 @@ class Catalog:
         self._cos_radius = np.cos(np.radians(table[:, 4]))
         self._stamp = stamp
         return True
+
+    def status(self) -> dict:
+        """What the snapshot holds, for /health: whether it is complete, the date
+        (MJD) it was filled up to, and how many exposures it lists. With no
+        snapshot: not complete, no date, no exposures."""
+        with self._lock:
+            loaded = self._load()
+            return {
+                "complete": bool(loaded and self.complete),
+                "through_mjd": self.through_mjd if loaded else None,
+                "exposures": int(self._ids.size) if loaded else 0,
+            }
 
     def find(self, ra: float, dec: float) -> list[Exposure] | None:
         """Exposures whose footprint contains (ra, dec), sorted by mjd.
