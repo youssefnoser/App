@@ -4,7 +4,10 @@
   "private": true,
   "description": "NASA-inspired SPHEREx sky exploration frontend",
   "scripts": {
+    "sync-engine": "node scripts/sync-engine.mjs",
+    "predev": "node scripts/sync-engine.mjs",
     "dev": "next dev -p 5173",
+    "prebuild": "node scripts/sync-engine.mjs",
     "build": "next build",
     "start": "next start -p 5173",
     "check": "tsc --noEmit",

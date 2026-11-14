@@ -87,13 +87,17 @@ Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6
 
 ## Next.js canvas integration
 
-The existing Next.js UI (`web/components/SkyExplorer.tsx`) controls the same
-Stellarium canvas via `SkyCanvas.tsx`. Its layout, drawers, overlays and control
-components remain in place. `web/index.html` and its runtime remain independent.
+The Next.js UI (`web/components/SkyExplorer.tsx`) starts Stellarium exactly as
+`web/index.html` does: `SkyCanvas.tsx` calls `initSky()` from `web/js/sky.js`, the
+engine owns the view (drag and wheel move it directly), and React only reads the
+view back (`onView`) or sends an explicit move (`goto`). Both pages load the engine
+from `/engine/`.
 
 | Path | Responsibility |
 |------|----------------|
-| `web/js/backend-sky.js` | React adapter reusing the legacy `Loader`, `PhotoCache`, timeline and hash format; sequence queries, progressive PNG loading, rolling medians, cancellation and north-up calibration |
+| `web/js/sky.js` | Engine bootstrap shared by both pages: script loading, equatorial airless view, SPHEREx HiPS background, RA/Dec read/set, engine-matching screen projection for the target marker |
+| `web/public/engine/` | Committed copy of the engine build; `npm run sync-engine` (also run before `dev` and `build`) refreshes it from `vendor/stellarium-web-engine/build` |
+| `web/js/backend-sky.js` | Frame loading on the shared sky, reusing the legacy `Loader`, `PhotoCache`, timeline and hash format; sequence queries, progressive PNG loading, rolling medians, cancellation and north-up calibration. Frames are keyed per sequence box, so after a pan the earlier boxes stay on screen and the new box is added to them (as on `index.html`); the layer hides only when zoomed out past frame scale |
 | `web/js/backend-sky.d.ts` | Typed adapter interface for React |
 | `web/lib/backend-bands.ts` | Map the existing selected bands into backend wavelength windows or detector queries |
 | `web/app/api/[...path]/route.ts` | Same-origin streaming proxy for the backend's target, view, patch, sequence and frame endpoints; preserves `X-Frame-Meta` |
