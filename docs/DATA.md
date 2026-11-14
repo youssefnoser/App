@@ -191,6 +191,16 @@ Exposure counts for Barnard's Star (measured): 60/60/59/59/60/58 for D1 to D6 (3
   where less than half the bilinear weight is valid: measured 0.6% against 0.7% native, and a single masked pixel keeps exactly its own area.
 - **ES says flagged pixels near a source are only a warning.** The photometry tool's `CONTAINS_BAD_PIXEL` (bit 32) is "a conservative warning" and does not necessarily mean exclude the measurement (ES 3.3).
 
+## Gaia DR3 (verified 2026-11-14)
+
+- IRSA TAP (`https://irsa.ipac.caltech.edu/TAP/sync`) serves table `gaia_dr3_source` with columns `source_id, ra, dec,
+  pmra, pmdec, parallax, phot_g_mean_mag, ref_epoch`. `ref_epoch` is 2016.0 (MJD 57388.5). `pmra` includes cos dec.
+  `source_id = 4472832130942575872` returns Barnard's Star (pmra -801.551, pmdec 10362.394 mas/yr, parallax 546.98 mas).
+- Two-parameter solutions have empty `pmra`, `pmdec`, `parallax`.
+- CDS Sesame `https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp/SNV?<name>` returns XML with `jradeg`/`jdedeg` (J2000)
+  and `pmRA`/`pmDE`, and sends `Access-Control-Allow-Origin: *`, so the browser calls it directly.
+- IRSA TAP and the ESA Gaia archive TAP send no CORS header, so Gaia queries go through `server/gaia.py`.
+
 ## Browser access: CORS
 
 IRSA's cutout and TAP responses carried no `Access-Control-Allow-Origin` header when tested with an `Origin` header (measured).

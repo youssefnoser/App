@@ -42,7 +42,7 @@ The page lists five, not six:
 | O3 | Generate spectra on the fly ("extra kudos"). |
 | O4 | Let users add or subtract images taken at different times. |
 | O5 | User-chosen field of view (larger FOV tracks faster movers, costs transfer time). |
-| O6 | Overlay other telescopes: Gaia (use DR3) and WISE. |
+| O6 | Overlay other telescopes: Gaia (use DR3) and WISE. Gaia DR3 overlay and Gaia/name search done (2026-11-14); WISE not yet. |
 | O7 | Query by URL (coordinates in the URL) so the tool can be embedded. |
 | O8 | Show metadata such as contamination flags. |
 | O9 | Use existing tools: Astropy for data, Aladin (CDS) for display. |

@@ -57,12 +57,27 @@ Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6
 `mode` (`frame` | `coadd` | `diff` | more from DISPLAY-IDEAS), `win` (time window in days, 0 = none),
 `pmra`, `pmdec` (mas/yr, for the predicted-position marker). Invalid values fall back to defaults and never throw.
 
+### `GET /api/gaia?ra=<deg>&dec=<deg>&fov=<deg>`
+
+200 JSON `{"epoch": 2016.0, "ra", "dec", "radius", "sources": [{"source_id": "<string>", "ra", "dec", "pmra", "pmdec",
+"parallax", "gmag", "fast"}]}`: the 50 brightest Gaia DR3 stars in the cone plus every star with total proper motion
+above 100 mas/yr. Positions at J2016.0. `source_id` is a string (19 digits overflow JavaScript numbers); `pmra`, `pmdec`,
+`parallax`, `gmag` may be null. The centre snaps to a 0.05 deg grid and the radius to 0.1/0.25/0.5/0.75 deg; answers are
+cached forever in `cache_dir()/gaia/` (empty ones are not). 422 for invalid input, 502 if IRSA fails.
+
+### `GET /api/gaia/source/{source_id}`
+
+200 one source as above, 404 `No Gaia DR3 source has that ID.`, 422 unless 1 to 19 digits, 502 if IRSA fails.
+
+Object names are resolved in the browser by CDS Sesame (it allows any origin), not by this server.
+
 ## Files
 
 | Path | Responsibility |
 |------|----------------|
 | `server/targets.py` | `TARGETS`, `propagate()` |
 | `server/irsa.py` | `find_exposures()` |
+| `server/gaia.py` | Gaia DR3 from IRSA TAP: `cone()` (brightest + fast movers), `source()` by id |
 | `server/cutouts.py` | `fetch_cutout()` |
 | `server/mirror.py` | `fetch_exposure()` (whole file from the AWS mirror, trimmed, LRU cache with a size cap), `cut()` (local crop), `prefetch()` |
 | `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()` |
@@ -85,6 +100,11 @@ Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6
 | `web/shared/queue.js` | progressive frame loading (`Loader`, `priorityList`) |
 | `web/shared/timeline.js` | visit steps for the blink |
 | `web/shared/photos.js` | `PhotoCache` |
+| `web/shared/gaia.js` | Gaia helpers: `propagate()` (epoch), `classifyQuery()`, `parseSesame()`, `tooltipLines()` |
+| `web/lib/resolve.ts` | search lookups: name via Sesame, Gaia DR3 id via `/api/gaia/source`, placed at today's position |
+| `web/lib/gaiaFetch.ts` | `needsRefetch()`: when the overlay asks `/api/gaia` again |
+| `web/lib/projection.ts` | `projectSkyToScreen()`: RA/Dec to screen pixels for HTML markers |
+| `web/components/GaiaOverlay.tsx` | Gaia rings, fast-mover arrows, tooltips, click to re-centre |
 | `tests/` | pytest (server); `tests/test_targets.py` covers the five targets |
 | `web/tests/shared/` | node:test for `web/shared/` |
 | `web/tests/unit/`, `web/tests/browser/` | Next.js unit tests and Playwright |
