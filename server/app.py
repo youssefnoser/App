@@ -13,6 +13,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import warnings
 import zlib
 from concurrent.futures import ThreadPoolExecutor
@@ -62,6 +63,16 @@ MAX_FOV_DEG = 1.0
 # the old look. 2: NaN-aware resampling and the saturation-aware pixel mask.
 RENDER_VERSION = 2
 
+# A cell's exposure list fetched from IRSA (no complete snapshot) is reused for a
+# day, so a new release reaches the page within a day without asking IRSA per view.
+CELL_CACHE_MAX_AGE_S = 86400.0
+
+# What the page reads when a frame cannot be had. Sequence frames and wavelength
+# maps always come from the mirror (server/ranges.py); patch frames follow
+# SPHEREX_SOURCE.
+MIRROR_DOWN = "The SPHEREx copy on AWS (the mirror) did not return this frame. Try again in a moment."
+IRSA_DOWN = "The SPHEREx archive (IRSA) did not return this frame. Try again."
+
 app = FastAPI(title="SPHEREx Blink")
 
 
@@ -100,25 +111,38 @@ def _write_atomic(path: Path, data: bytes) -> None:
         raise
 
 
+def _complete_snapshot_at(ra: float, dec: float) -> list[Exposure] | None:
+    """Exposures holding the point, from the local snapshot when it is complete;
+    None when there is no snapshot or it is still being filled (its answer may be
+    missing exposures)."""
+    snapshot = catalog()
+    found = snapshot.find(ra, dec)
+    return found if found is not None and snapshot.complete else None
+
+
 def _exposures_for_cell(cell: int) -> list[Exposure]:
-    """Exposures covering the cell centre: per-cell disk cache, then the local
-    snapshot (server/catalog.py), then IRSA TAP."""
+    """Exposures covering the cell centre: the complete local snapshot
+    (server/catalog.py), else a per-cell disk cache younger than
+    CELL_CACHE_MAX_AGE_S, else IRSA TAP.
+
+    The snapshot comes first so that refreshing it after a new release takes
+    effect at once; the disk cache only spares IRSA when there is no snapshot.
+    """
+    found = _complete_snapshot_at(*cell_centre(cell))
+    if found is not None:
+        return found
     path = cache_dir() / "tap" / f"{cell}.json"
     try:
-        rows = json.loads(path.read_text())
-        return [
-            Exposure(r["uri"], r["mjd"], r["detector"], r["obs_id"],
-                     tuple(tuple(p) for p in r["footprint"]))
-            for r in rows
-        ]
+        if time.time() - path.stat().st_mtime < CELL_CACHE_MAX_AGE_S:
+            rows = json.loads(path.read_text())
+            return [
+                Exposure(r["uri"], r["mjd"], r["detector"], r["obs_id"],
+                         tuple(tuple(p) for p in r["footprint"]))
+                for r in rows
+            ]
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    snapshot = catalog()
-    exposures = snapshot.find(*cell_centre(cell))
-    if exposures is None or not snapshot.complete:
-        # No local snapshot, or it is still being filled (its answer may be
-        # missing exposures): ask IRSA.
-        exposures = find_exposures(*cell_centre(cell))
+    exposures = find_exposures(*cell_centre(cell))
     rows = [
         {"uri": e.uri, "mjd": e.mjd, "detector": e.detector, "obs_id": e.obs_id,
          "footprint": [list(p) for p in e.footprint]}
@@ -351,7 +375,7 @@ def patch_frame(
     except IrsaError as err:
         raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
     except CutoutError as err:
-        raise HTTPException(502, "The SPHEREx archive (IRSA) did not return this frame. Try again.") from err
+        raise HTTPException(502, MIRROR_DOWN if pixel_source() == "aws" else IRSA_DOWN) from err
     return Response(
         png,
         media_type="image/png",
@@ -443,9 +467,16 @@ def _sequence(ra: float, dec: float, detector: int | None = None,
     """(exposure, visit index, wavelength) for every exposure whose footprint holds
     the point, in time order, kept if it is on `detector` or, when `wavelength` is
     given, if the wavelength it records at the point is within the fraction `width`
-    of it (0.05 keeps 5 % either side). Wavelength is None in detector mode."""
+    of it (0.05 keeps 5 % either side). Wavelength is None in detector mode.
+
+    The complete snapshot is asked about the point itself. Without one, the list
+    of the point's cell is filtered to the point, which misses the few exposures
+    that reach the point but not the cell centre (about 2 % on average)."""
+    found = _complete_snapshot_at(ra, dec)
+    if found is None:
+        found = _exposures_for_cell(cell_of(ra, dec))
     covering = []
-    for index, visit in enumerate(group_visits(_exposures_for_cell(cell_of(ra, dec)))):
+    for index, visit in enumerate(group_visits(found)):
         covering += [(e, index) for e in visit if footprint_contains(e.footprint, ra, dec)]
     if wavelength is None:
         return [(e, v, None) for e, v in covering if e.detector == detector]
@@ -476,7 +507,8 @@ def sequence(
         raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
     except CutoutError as err:
         raise HTTPException(
-            502, "The SPHEREx archive (IRSA) did not return the wavelength map. Try again.") from err
+            502, "The SPHEREx copy on AWS (the mirror) did not return the wavelength map."
+                 " Try again in a moment.") from err
     by_visit: dict[int, list[Exposure]] = {}
     for e, visit, _ in items:
         by_visit.setdefault(visit, []).append(e)
@@ -565,11 +597,11 @@ def sequence_frame(
         except IrsaError as err:
             raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
         except CutoutError as err:
-            raise HTTPException(
-                502, "The SPHEREx archive (IRSA) did not return this frame. Try again.") from err
+            raise HTTPException(502, MIRROR_DOWN) from err
         except Exception as err:  # a file the pipeline cannot read
             raise HTTPException(
-                502, "The SPHEREx archive (IRSA) returned a frame that could not be drawn.") from err
+                502, "The SPHEREx copy on AWS (the mirror) returned a frame that could not be"
+                     " drawn. Try another frame.") from err
         _write_atomic(meta_path, json.dumps(meta).encode())
         _write_atomic(png_path, png)
     return Response(
