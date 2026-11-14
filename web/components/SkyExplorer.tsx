@@ -1,0 +1,473 @@
+'use client';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import {
+  dates,
+  targets,
+  zoomAt,
+  MIN_ZOOM,
+  MAX_ZOOM,
+  getNextZoomIn,
+  getNextZoomOut,
+  type Camera,
+  type Point,
+} from '@/lib/sky';
+import BandSelector from './BandSelector';
+import Rotor from './Rotor';
+import SkyCanvas from './SkyCanvas';
+import ImageMath from './ImageMath';
+import {
+  GoogleMyLocationIcon,
+  GoogleLayersIcon,
+  GoogleZoomInIcon,
+  GoogleZoomOutIcon,
+} from './GoogleMapIcons';
+
+function SpaceTargetIcon({ type }: { type: string }) {
+  if (type.includes('BROWN DWARF')) {
+    // Ringed substellar world / brown dwarf with planetary rings
+    return (
+      <span className="target-icon-badge brown-dwarf-badge" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="5" fill="rgba(192, 132, 252, 0.25)" stroke="#c084fc" />
+          <ellipse cx="12" cy="12" rx="9.5" ry="3.5" transform="rotate(-25 12 12)" stroke="#e9d5ff" strokeWidth="1.3" />
+        </svg>
+      </span>
+    );
+  }
+  if (type.includes('PROPER-MOTION')) {
+    // High-proper motion star with motion streak vector & astrometric spikes
+    return (
+      <span className="target-icon-badge motion-star-badge" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="13" cy="11" r="3.5" fill="rgba(56, 189, 248, 0.3)" stroke="#38bdf8" />
+          <line x1="13" y1="3" x2="13" y2="6" stroke="#38bdf8" strokeWidth="1.5" />
+          <line x1="13" y1="16" x2="13" y2="19" stroke="#38bdf8" strokeWidth="1.5" />
+          <line x1="5" y1="11" x2="8" y2="11" stroke="#38bdf8" strokeWidth="1.5" />
+          <line x1="18" y1="11" x2="21" y2="11" stroke="#38bdf8" strokeWidth="1.5" />
+          <path d="M4 19c2.5-1 5.5-3.5 7.5-6.5" stroke="#7dd3fc" strokeWidth="1.4" strokeDasharray="2 2" />
+        </svg>
+      </span>
+    );
+  }
+  // Variable star with circumstellar accretion disk
+  return (
+    <span className="target-icon-badge variable-star-badge" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="4.2" fill="rgba(251, 191, 36, 0.25)" stroke="#fbbf24" />
+        <ellipse cx="12" cy="12" rx="9" ry="3.2" transform="rotate(-20 12 12)" stroke="#fef08a" strokeWidth="1.3" strokeDasharray="3 2" />
+        <circle cx="12" cy="12" r="1.5" fill="#ffffff" />
+      </svg>
+    </span>
+  );
+}
+
+export type SearchHistoryItem = {
+  id: string;
+  query: string;
+  name?: string;
+  type?: string;
+  ra: number;
+  dec: number;
+  timestamp: number;
+};
+
+export default function SkyExplorer() {
+  const [searchOpen, setSearchOpen] = useState(false), [query, setQuery] = useState(''), [message, setMessage] = useState('');
+  const [history, setHistory] = useState<SearchHistoryItem[]>([]);
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('sky-search-history') ?? '[]');
+      if (Array.isArray(stored)) {
+        const parsed: SearchHistoryItem[] = stored
+          .map((item: any) => {
+            if (!item || !Number.isFinite(item.ra) || !Number.isFinite(item.dec)) return null;
+            const matching = targets.find(
+              (t) => Math.abs(t.ra - item.ra) < 0.001 && Math.abs(t.dec - item.dec) < 0.001
+            );
+            return {
+              id: item.id || `${item.ra.toFixed(4)}:${item.dec.toFixed(4)}`,
+              query: item.query || (matching ? matching.name : `${item.ra.toFixed(4)}°, ${item.dec.toFixed(4)}°`),
+              name: item.name || matching?.name,
+              type: item.type || (matching ? matching.type : 'COORDINATES'),
+              ra: item.ra,
+              dec: item.dec,
+              timestamp: item.timestamp || Date.now(),
+            };
+          })
+          .filter(Boolean) as SearchHistoryItem[];
+        setHistory(parsed.slice(0, 8));
+      }
+    } catch {}
+  }, []);
+  const [selected, setSelected] = useState(0);
+  const [coordinates, setCoordinates] = useState({ ra: 269.4521, dec: 4.6934 });
+  const [viewCoordinates, setViewCoordinates] = useState({ ra: 269.4521, dec: 4.6934 });
+  const [recenterCount, setRecenterCount] = useState(0);
+  const [camera, setCamera] = useState<Camera>({ zoom: 1, pan: { x: 0, y: 0 } });
+  const [size, setSize] = useState<Point>({ x: 1, y: 1 });
+  const [frame, setFrame] = useState(0), [playing, setPlaying] = useState(false), [speed, setSpeed] = useState(1), [loop, setLoop] = useState(true);
+  const [infrared, setInfrared] = useState(true), [grid, setGrid] = useState(true), [bands, setBands] = useState<number[]>([1]);
+  const [gaiaEnabled, setGaiaEnabled] = useState(false);
+  const [wiseEnabled, setWiseEnabled] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [bandsOpen, setBandsOpen] = useState(false);
+  const searchDock = useRef<HTMLDivElement>(null), searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const outside = (event: PointerEvent) => { if (!searchDock.current?.contains(event.target as Node)) setSearchOpen(false); };
+    document.addEventListener('pointerdown', outside); return () => document.removeEventListener('pointerdown', outside);
+  }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(location.search), a = params.get('ra'), d = params.get('dec');
+    const fov = Number(params.get('fov')), epoch = Number(params.get('frame'));
+    if (params.has('fov') && Number.isFinite(fov) && fov > 0) setCamera({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, 5 / fov)), pan: { x: 0, y: 0 } });
+    if (params.has('frame') && Number.isInteger(epoch) && epoch >= 0 && epoch <= 5) setFrame(epoch);
+    if (a !== null && d !== null && a.trim() && d.trim() && Number.isFinite(+a) && Number.isFinite(+d) && +a >= 0 && +a < 360 && +d >= -90 && +d <= 90) {
+      setCoordinates({ ra: +a, dec: +d });
+      setViewCoordinates({ ra: +a, dec: +d });
+      setSelected(targets.findIndex(target => Math.abs(target.ra - +a) < .001 && Math.abs(target.dec - +d) < .001));
+    }
+  }, []);
+  useEffect(() => {
+    if (!playing) return;
+    const timer = setInterval(() => setFrame(current => {
+      if (current === 5 && !loop) return current;
+      return (current + 1) % 6;
+    }), 600 / speed);
+    return () => clearInterval(timer);
+  }, [playing, loop, speed]);
+  useEffect(() => { if (playing && frame === 5 && !loop) setPlaying(false); }, [frame, loop, playing]);
+  const onZoom = useCallback((value: number, anchor?: Point) => setCamera(current => zoomAt(current, value, anchor ?? { x: size.x / 2, y: size.y / 2 })), [size]);
+  const onPan = useCallback((pan: Point) => setCamera(current => ({ ...current, pan })), []);
+  const onResize = useCallback((next: Point) => setSize(next), []);
+  const onBands = useCallback((next: number[]) => setBands(next), []);
+  function saveHistoryItem(item: { query: string; name?: string; type?: string; ra: number; dec: number }) {
+    setHistory((prev) => {
+      const filtered = prev.filter(
+        (h) => Math.hypot(h.ra - item.ra, h.dec - item.dec) > 0.0005 && h.query.toLowerCase() !== item.query.toLowerCase()
+      );
+      const next: SearchHistoryItem[] = [
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          query: item.query,
+          name: item.name,
+          type: item.type || 'COORDINATES',
+          ra: item.ra,
+          dec: item.dec,
+          timestamp: Date.now(),
+        },
+        ...filtered,
+      ].slice(0, 8);
+      try {
+        localStorage.setItem('sky-search-history', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }
+
+  function removeHistoryItem(id: string) {
+    setHistory((prev) => {
+      const next = prev.filter((h) => h.id !== id);
+      try {
+        localStorage.setItem('sky-search-history', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }
+
+  function clearHistory() {
+    setHistory([]);
+    try {
+      localStorage.removeItem('sky-search-history');
+    } catch {}
+  }
+
+  function updateCoordinates(a: number, d: number) {
+    setCoordinates({ ra: a, dec: d });
+    setViewCoordinates({ ra: a, dec: d });
+    const url = new URL(location.href);
+    url.searchParams.set('ra', String(a));
+    url.searchParams.set('dec', String(d));
+    window.history.replaceState(null, '', url);
+    setCamera({ zoom: 1, pan: { x: 0, y: 0 } });
+    setFrame(0);
+    setPlaying(false);
+  }
+
+  function chooseTarget(index: number) {
+    const target = targets[index];
+    setSelected(index);
+    updateCoordinates(target.ra, target.dec);
+    saveHistoryItem({
+      query: target.name,
+      name: target.name,
+      type: target.type,
+      ra: target.ra,
+      dec: target.dec,
+    });
+    setQuery('');
+    setMessage(`Exploring ${target.name} - simulated observations`);
+    setSearchOpen(false);
+  }
+
+  function search(event: FormEvent) {
+    event.preventDefault();
+    const normalize = (value: string) => value.toLowerCase().replace(/[’']/g, '').trim();
+    const text = query.trim();
+    if (!text) {
+      setMessage('Enter an object name or RA, Dec in degrees.');
+      return;
+    }
+    const pair = text.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\u00b0?\s*(?:,\s*|\s+)([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\u00b0?$/);
+    if (pair) {
+      const a = Number(pair[1]), d = Number(pair[2]);
+      if (a < 0 || a >= 360 || d < -90 || d > 90) {
+        setMessage('RA must be 0 to less than 360 degrees; Dec must be -90 to 90 degrees.');
+        return;
+      }
+      updateCoordinates(a, d);
+      const matchIdx = targets.findIndex(item => Math.abs(item.ra - a) < .001 && Math.abs(item.dec - d) < .001);
+      setSelected(matchIdx);
+      saveHistoryItem({
+        query: `${a.toFixed(4)}°, ${d.toFixed(4)}°`,
+        name: matchIdx >= 0 ? targets[matchIdx].name : undefined,
+        type: matchIdx >= 0 ? targets[matchIdx].type : 'COORDINATES',
+        ra: a,
+        dec: d,
+      });
+      setMessage(`Exploring ${a} degrees, ${d} degrees`);
+      setQuery('');
+      setSearchOpen(false);
+      return;
+    }
+    const index = targets.findIndex(target => normalize(target.name).includes(normalize(query)));
+    if (index >= 0) {
+      chooseTarget(index);
+    } else {
+      setMessage('Try Barnard’s Star, Epsilon Indi B, WISE 0855, RW Aurigae, or R Draconis.');
+    }
+  }
+  const target = targets[selected];
+  const readout = viewCoordinates;
+  return <main>
+    <div
+      className={`search-dock${searchOpen || query ? ' is-searching' : ''}${bandsOpen || advancedOpen ? ' dock-hidden' : ''}`}
+      ref={searchDock}
+      style={bandsOpen || advancedOpen ? { opacity: 0, pointerEvents: 'none', visibility: 'hidden' } : undefined}
+      onKeyDown={event => { if (event.key === 'Escape') { setSearchOpen(false); searchInput.current?.focus(); } }}
+    >
+      <form onSubmit={search}>
+        <span className="search-glass-icon" aria-hidden="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+        </span>
+        <input ref={searchInput} aria-label="Search celestial objects" aria-expanded={searchOpen} aria-controls="sky-search-options" placeholder="Search the sky…" value={query} onFocus={() => setSearchOpen(true)} onClick={() => setSearchOpen(true)} onChange={event => { setQuery(event.target.value); setSearchOpen(true); }} />
+        {query && (
+          <button type="button" className="search-clear-btn" aria-label="Clear search input" onClick={() => { setQuery(''); searchInput.current?.focus(); }}>
+            ✕
+          </button>
+        )}
+      </form>
+      <div id="sky-search-options" className="search-options" hidden={!searchOpen}>
+        {history.length > 0 && (
+          <div className="search-history-container">
+            <div className="search-history-header">
+              <span className="eyebrow">RECENT SEARCHES</span>
+              <button
+                type="button"
+                className="clear-history-button"
+                onClick={clearHistory}
+                aria-label="Clear all search history"
+              >
+                Clear all
+              </button>
+            </div>
+            <div className="search-history-list">
+              {history.map((item) => (
+                <div key={item.id} className="search-history-row">
+                  <button
+                    type="button"
+                    className="history-entry-button"
+                    onClick={() => {
+                      updateCoordinates(item.ra, item.dec);
+                      const idx = targets.findIndex(
+                        (t) => Math.abs(t.ra - item.ra) < 0.001 && Math.abs(t.dec - item.dec) < 0.001
+                      );
+                      setSelected(idx);
+                      saveHistoryItem(item);
+                      setQuery('');
+                      setSearchOpen(false);
+                      setMessage(`Exploring ${item.name ?? `${item.ra.toFixed(4)}°, ${item.dec.toFixed(4)}°`}`);
+                    }}
+                  >
+                    <span className="history-space-icon" aria-hidden="true">
+                      {item.type && item.type !== 'COORDINATES' ? (
+                        <SpaceTargetIcon type={item.type} />
+                      ) : (
+                        <span className="target-icon-badge coord-badge">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="9" />
+                            <circle cx="12" cy="12" r="3" />
+                            <line x1="12" y1="3" x2="12" y2="7" />
+                            <line x1="12" y1="17" x2="12" y2="21" />
+                            <line x1="3" y1="12" x2="7" y2="12" />
+                            <line x1="17" y1="12" x2="21" y2="12" />
+                          </svg>
+                        </span>
+                      )}
+                    </span>
+                    <span className="history-text">
+                      <strong>{item.name ?? item.query}</strong>
+                      <small>
+                        {item.ra.toFixed(4)}°, {item.dec >= 0 ? '+' : ''}{item.dec.toFixed(4)}°
+                        {item.name && item.name !== item.query ? ` · "${item.query}"` : ''}
+                      </small>
+                    </span>
+                    <span className="history-jump">↗</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="history-delete-btn"
+                    aria-label={`Delete ${item.name ?? item.query} from history`}
+                    title="Delete item"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeHistoryItem(item.id);
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="search-options-heading"><span className="eyebrow">EXPLORE THE SKY</span></div>
+        <div className="search-targets">
+          {targets
+            .filter(item => !query.trim() || item.name.toLowerCase().replace(/[’']/g, '').includes(query.toLowerCase().replace(/[’']/g, '').trim()))
+            .map(item => (
+              <button key={item.name} type="button" onClick={() => chooseTarget(targets.indexOf(item))}>
+                <SpaceTargetIcon type={item.type} />
+                <span>
+                  <strong>{item.name}</strong>
+                  <small>{item.description}</small>
+                </span>
+                <span>↗</span>
+              </button>
+            ))}
+        </div>
+        <p id="search-coordinate-hint" className="search-coordinate-hint">Search a name or enter coordinates in degrees, e.g. 269.4521, +4.6934</p>
+      </div>
+    </div>
+    <section className="sky" aria-label="Interactive simulated sky map">
+      <SkyCanvas
+        camera={camera}
+        frame={frame}
+        selected={selected}
+        bandCount={bands.length}
+        infrared={infrared}
+        grid={grid}
+        name={target?.name ?? `${coordinates.ra.toFixed(4)}°, ${coordinates.dec >= 0 ? '+' : ''}${coordinates.dec.toFixed(4)}°`}
+        objectType={target?.type ?? 'CUSTOM COORDINATES'}
+        coordinates={coordinates}
+        gaiaEnabled={gaiaEnabled}
+        wiseEnabled={wiseEnabled}
+        recenterTrigger={recenterCount}
+        onCoordinatesChange={setViewCoordinates}
+        onZoom={onZoom}
+        onPan={onPan}
+        onResize={onResize}
+      />
+      <div className="map-top">
+        <div className="map-top-left">
+          <ImageMath
+            frame={frame}
+            bands={bands}
+            coordinates={coordinates}
+            targetName={target?.name ?? 'Your sky region'}
+            gaiaEnabled={gaiaEnabled}
+            wiseEnabled={wiseEnabled}
+            onToggleGaia={() => setGaiaEnabled(!gaiaEnabled)}
+            onToggleWise={() => setWiseEnabled(!wiseEnabled)}
+            onSelectBand={(b) => setBands([b])}
+            onSelectBands={(bs) => setBands(bs)}
+            onSelectCoords={(ra, dec) => updateCoordinates(ra, dec)}
+            onOpenChange={setAdvancedOpen}
+          />
+          {!advancedOpen && (
+            <div className="map-coordinate">ICRS <span>{readout.ra.toFixed(4)}°, {readout.dec >= 0 ? '+' : ''}{readout.dec.toFixed(4)}°</span></div>
+          )}
+        </div>
+        <div className="view-switch"><button className={infrared ? 'selected' : ''} onClick={() => setInfrared(true)}>Infrared</button><button className={!infrared ? 'selected' : ''} onClick={() => setInfrared(false)}>Visible</button></div>
+      </div>
+      <div className="map-tools">
+        <button
+          aria-label="Recenter map"
+          title="Recenter on target"
+          onClick={() => {
+            setCamera({ zoom: 1, pan: { x: 0, y: 0 } });
+            setViewCoordinates(coordinates);
+            setRecenterCount(c => c + 1);
+          }}
+        >
+          <GoogleMyLocationIcon />
+        </button>
+        <button aria-label="Toggle coordinate grid" aria-pressed={grid} title="Equatorial Grid" onClick={() => setGrid(!grid)}>
+          <GoogleLayersIcon />
+        </button>
+        <button
+          aria-label="Toggle Gaia DR3 overlay"
+          aria-pressed={gaiaEnabled}
+          className={`overlay-toggle-btn ${gaiaEnabled ? 'active' : ''}`}
+          title="Gaia DR3 Overlay"
+          onClick={() => setGaiaEnabled(!gaiaEnabled)}
+        >
+          G
+        </button>
+        <button
+          aria-label="Toggle WISE overlay"
+          aria-pressed={wiseEnabled}
+          className={`overlay-toggle-btn ${wiseEnabled ? 'active' : ''}`}
+          title="AllWISE Mid-IR Overlay"
+          onClick={() => setWiseEnabled(!wiseEnabled)}
+        >
+          W
+        </button>
+      </div>
+      <BandSelector onSelection={onBands} onOpenChange={setBandsOpen} />
+      <div className="map-bottom"><span>{(5 / camera.zoom).toFixed(1)} arcmin</span><span>Illustrative star field / Not for scientific analysis</span></div>
+      <section className="timeline rotary-console" aria-label="Sky controls">
+        <div className="zoom-section map-zoom-controls" aria-label="Zoom controls">
+          <button
+            type="button"
+            id="zoom-in"
+            aria-label="Zoom in"
+            title="Zoom in"
+            disabled={camera.zoom >= MAX_ZOOM}
+            onClick={() => onZoom(getNextZoomIn(camera.zoom))}
+          >
+            <GoogleZoomInIcon />
+          </button>
+          <div className="zoom-divider" />
+          <button
+            type="button"
+            id="zoom-out"
+            aria-label="Zoom out"
+            title="Zoom out"
+            disabled={camera.zoom <= MIN_ZOOM}
+            onClick={() => onZoom(getNextZoomOut(camera.zoom))}
+          >
+            <GoogleZoomOutIcon />
+          </button>
+        </div>
+        <><div className="knob-section time-section half-section"><Rotor id="time-knob" label="Observation frame" value={frame} min={0} max={5} step={1} labels={['JUN 25', 'DEC 25', 'JUN 26', 'DEC 26', 'JUN 27', 'DEC 27']} onChange={setFrame} onGrab={() => setPlaying(false)}><span>{dates[frame]}</span><small>FRAME {String(frame + 1).padStart(2, '0')} / 06</small></Rotor></div>
+        <div className="knob-section speed-section half-section"><Rotor id="speed-knob" label="Playback speed" value={speed} min={.5} max={3} step={.5} labels={['0.5×', '1×', '1.5×', '2×', '2.5×', '3×']} onChange={setSpeed}><span>{speed}×</span><small>PLAYBACK SPEED</small></Rotor></div>
+        <div className="playback-panel"><div className="playback-buttons"><button aria-label="Previous frame" onClick={() => { setPlaying(false); setFrame(Math.max(0, frame - 1)); }}>◀</button><button className="play" aria-label={playing ? 'Pause observations' : 'Play observations'} onClick={() => { if (!playing && frame === 5) setFrame(0); setPlaying(!playing); }}>{playing ? 'Ⅱ' : '▶'}</button><button aria-label="Next frame" onClick={() => { setPlaying(false); setFrame(Math.min(5, frame + 1)); }}>▶</button><button className={`loop${loop ? ' active' : ''}`} aria-label="Loop playback" aria-pressed={loop} onClick={() => setLoop(!loop)}>↻</button></div></div>
+        </>
+      </section>
+    </section>
+    <div className="search-feedback" role="status" hidden={searchOpen}>{message}</div>
+  </main>;
+}
