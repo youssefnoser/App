@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { priorityList, Loader } from '../js/queue.js';
+import { priorityList, Loader } from '../../shared/queue.js';
 
 const key = (pix, uri) => `${pix}|${uri}`;
 

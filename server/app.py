@@ -3,8 +3,9 @@
 Routes:
   GET /api/view?ra=&dec=&fov=            which patches and exposures cover a view
   GET /api/patch/{pix}/frame.png?uri=    one patch's crop of one exposure, as a PNG
-Static files: /engine and /skydata (Stellarium Web Engine) and / (web/), each
-mounted only if its directory exists, so the app imports without a vendor build.
+Static files: /engine and /skydata (Stellarium Web Engine), /shared (web/shared/, modules
+the test bench shares with the Next.js app) and / (testbench/), each mounted only if its
+directory exists, so the app imports without a vendor build.
 """
 
 import hashlib
@@ -53,7 +54,8 @@ from server.timeline import first_batch, group_visits
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE_DIR = ROOT / "vendor" / "stellarium-web-engine" / "build"
 SKYDATA_DIR = ROOT / "vendor" / "stellarium-web-engine" / "apps" / "test-skydata"
-WEB_DIR = ROOT / "web"
+TESTBENCH_DIR = ROOT / "testbench"
+SHARED_DIR = ROOT / "web" / "shared"
 
 # Frames only load below 0.5 deg; allow a 2x margin (ruling R14).
 MAX_FOV_DEG = 1.0
@@ -584,5 +586,7 @@ if ENGINE_DIR.is_dir():
     app.mount("/engine", StaticFiles(directory=ENGINE_DIR), name="engine")
 if SKYDATA_DIR.is_dir():
     app.mount("/skydata", StaticFiles(directory=SKYDATA_DIR), name="skydata")
-if WEB_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+if SHARED_DIR.is_dir():
+    app.mount("/shared", StaticFiles(directory=SHARED_DIR), name="shared")
+if TESTBENCH_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=TESTBENCH_DIR, html=True), name="testbench")

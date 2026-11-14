@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendCache } from '../js/frontend-cache.js';
+import { createFrontendCache } from '../../shared/frontend-cache.js';
 
 test('canonical requests share in-flight work and reuse bytes and frame metadata', async () => {
  let calls=0;

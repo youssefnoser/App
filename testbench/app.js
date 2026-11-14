@@ -4,11 +4,11 @@
 // there), so nothing in this file touches pixel values.
 
 import { initSky } from './sky.js';
-import { Loader, priorityList } from './queue.js';
-import { buildSteps, keepStep } from './timeline.js';
-import { PhotoCache } from './photos.js';
-import { parseHash, toHash } from './state.js';
-import { boxCovers, frameBox, LOAD_FOV_DEG } from './viewbox.js';
+import { Loader, priorityList } from '/shared/queue.js';
+import { buildSteps, keepStep } from '/shared/timeline.js';
+import { PhotoCache } from '/shared/photos.js';
+import { parseHash, toHash } from '/shared/state.js';
+import { boxCovers, frameBox, LOAD_FOV_DEG } from '/shared/viewbox.js';
 
 const HIPS = 'https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube';
 const SETTLE_MS = 300; // and once the view has been still this long

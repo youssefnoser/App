@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { frameBox, LOAD_FOV_DEG, SEQ_MAX_FOV_DEG } from '../js/viewbox.js';
+import { frameBox, LOAD_FOV_DEG, SEQ_MAX_FOV_DEG } from '../../shared/viewbox.js';
 
 // The engine's fov is the short side of the canvas (proj_stereographic.c compute_fov).
 
@@ -43,7 +43,7 @@ test('a normal 16:10 screen loads right up to the threshold', () => {
   assert.ok(frameBox(0.499, 1600, 1000) <= SEQ_MAX_FOV_DEG);
 });
 
-import { boxCovers } from '../js/viewbox.js';
+import { boxCovers } from '../../shared/viewbox.js';
 
 // 16:10 screen at 0.4 deg height: 0.64 x 0.4 deg, so it fits a 0.76 deg box with
 // 0.06 deg to spare left and right and 0.18 deg above and below.

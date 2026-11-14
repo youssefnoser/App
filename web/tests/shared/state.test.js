@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseHash, toHash } from '../js/state.js';
+import { parseHash, toHash } from '../../shared/state.js';
 
 const DEFAULTS = { ra: 269.4463, dec: 4.7677, fov: 0.25, step: 0 };
 

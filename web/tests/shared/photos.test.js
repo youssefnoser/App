@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { PhotoCache } from '../js/photos.js';
+import { PhotoCache } from '../../shared/photos.js';
 
 // Fake Stellarium layer per ruling: add(type, args) returns an object with
 // mutable fields (visible etc.), remove(obj) takes it off the layer.

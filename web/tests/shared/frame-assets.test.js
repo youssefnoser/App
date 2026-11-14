@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrameAssets } from '../js/frame-assets.js';
+import { createFrameAssets } from '../../shared/frame-assets.js';
 
 test('Blob images are reused, bounded and released on eviction/disposal', async () => {
  let calls=0;const evicted=[];

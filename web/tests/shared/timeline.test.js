@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSteps, keepStep } from '../js/timeline.js';
+import { buildSteps, keepStep } from '../../shared/timeline.js';
 
 const ex = (uri, mjd, detector = 6, date = '2025-08-15') => ({ uri, mjd, date, detector });
 

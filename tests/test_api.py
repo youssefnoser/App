@@ -571,3 +571,17 @@ def test_sequence_needs_exactly_one_of_detector_and_wavelength(aws_client, monke
     seq_setup(monkeypatch, tmp_path)
     assert aws_client.get(f"/api/sequence?{SEQ}").status_code == 422
     assert aws_client.get(f"/api/sequence?{SEQ}&detector=6&wavelength=4.6").status_code == 422
+
+
+def test_root_serves_testbench(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'type="module" src="app.js"' in r.text
+
+
+def test_shared_modules_served(client):
+    assert client.get("/shared/backend-sky.js").status_code == 200
+
+
+def test_web_source_not_exposed(client):
+    assert client.get("/package.json").status_code == 404

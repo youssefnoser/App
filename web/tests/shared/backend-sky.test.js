@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendCache } from '../js/frontend-cache.js';
-import { createBackendSky, frameAddress, readSkyCentre, pointSky } from '../js/backend-sky.js';
+import { createFrontendCache } from '../../shared/frontend-cache.js';
+import { createBackendSky, frameAddress, readSkyCentre, pointSky } from '../../shared/backend-sky.js';
 
 test('sequence frame URLs preserve coordinates and the median wavelength window', () => {
  const sequence = {ra:269.4,dec:4.7,fov:.15,wavelength:1.25,width:.05};
