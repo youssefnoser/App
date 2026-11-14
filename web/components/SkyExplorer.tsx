@@ -7,7 +7,7 @@ import type { BackendTimeline } from '@/shared/backend-sky.js';
 import BandSelector from './BandSelector';
 import { getBandWavelength } from '@/lib/spectral';
 import { resolveQuery } from '@/lib/resolve';
-import { needsRefetch, type Cone } from '@/lib/gaiaFetch';
+import { canShowGaia, needsRefetch, type Cone } from '@/lib/gaiaFetch';
 import type { GaiaSource } from '@/shared/gaia.js';
 import Rotor from './Rotor';
 import SkyCanvas, { type FovRequest } from './SkyCanvas';
@@ -196,6 +196,12 @@ export default function SkyExplorer() {
       return;
     }
     const view = { ra: viewCoordinates.ra, dec: viewCoordinates.dec, fov: fovDeg };
+    if (!canShowGaia(view.fov)) {
+      setGaiaSources([]);
+      gaiaCone.current = null;
+      setMessage('Zoom in to see Gaia stars.');
+      return;
+    }
     if (!needsRefetch(gaiaCone.current, view)) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -261,6 +267,7 @@ export default function SkyExplorer() {
   }
 
   function updateCoordinates(a: number, d: number) {
+    lookupTicket.current++; // any navigation cancels a name lookup still in flight
     setCoordinates({ ra: a, dec: d });
     setViewCoordinates({ ra: a, dec: d });
     const url = new URL(location.href);

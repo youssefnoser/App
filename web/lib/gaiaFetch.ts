@@ -25,3 +25,10 @@ export function needsRefetch(last: Cone | null, view: { ra: number; dec: number;
   if (snapRadius(view.fov) !== last.radius) return true;
   return separationDeg(last, view) + view.fov / 2 > last.radius;
 }
+
+/** Widest view (deg) one Gaia cone covers: twice the largest server radius. Wider views
+ *  are not fetched at all, so panning a wide view never queries IRSA. */
+export const GAIA_MAX_FOV = 1.5;
+export function canShowGaia(fov: number): boolean {
+  return fov <= GAIA_MAX_FOV;
+}

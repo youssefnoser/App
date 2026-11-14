@@ -14,3 +14,10 @@ assert.equal(needsRefetch(last, { ra: 269.45, dec: 4.75, fov: 0.6 }), true, 'rad
 // Separation wraps through RA 0/360.
 // fov 0.2 -> bucket 0.25; separation 0.1 + half-fov 0.1 = 0.2 stays inside.
 assert.equal(needsRefetch({ ra: 0.05, dec: 0, radius: 0.25 }, { ra: 359.95, dec: 0, fov: 0.2 }), false);
+
+// Above 1.5 deg no single cone (max radius 0.75) covers the view: do not fetch at all.
+import { canShowGaia } from '../../lib/gaiaFetch.ts';
+assert.equal(canShowGaia(0.1), true);
+assert.equal(canShowGaia(1.5), true);
+assert.equal(canShowGaia(1.6), false);
+assert.equal(canShowGaia(10), false);
