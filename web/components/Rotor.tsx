@@ -2,8 +2,15 @@
 import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { svgNumber } from '@/lib/rotor';
 
-type Props = { id: string; label: string; value: number; min: number; max: number; step: number; labels: string[]; children: ReactNode; onChange: (value: number) => void; onGrab?: () => void };
-export default function Rotor({ id, label, value, min, max, step, labels, children, onChange, onGrab }: Props) {
+// progress: fractions (0 to 1) drawn as two fixed arcs outside the ring, left to right.
+type Props = { id: string; label: string; value: number; min: number; max: number; step: number; labels: string[]; children: ReactNode; onChange: (value: number) => void; onGrab?: () => void; progress?: { loaded: number; cleaned: number } };
+const ARC_R = 166;
+// Arc along the visible 120 degrees of the dial, from its left end to `fraction` of the way.
+function arc(fraction: number) {
+  const f = Math.max(0, Math.min(1, fraction)), start = -60 * Math.PI / 180, end = (-60 + 120 * f) * Math.PI / 180;
+  return `M${svgNumber(180 + Math.sin(start) * ARC_R)} ${svgNumber(180 - Math.cos(start) * ARC_R)} A${ARC_R} ${ARC_R} 0 0 1 ${svgNumber(180 + Math.sin(end) * ARC_R)} ${svgNumber(180 - Math.cos(end) * ARC_R)}`;
+}
+export default function Rotor({ id, label, value, min, max, step, labels, children, onChange, onGrab, progress }: Props) {
   const clip = useId().replaceAll(':', '');
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointer: number; angle: number; value: number } | null>(null);
@@ -39,6 +46,6 @@ export default function Rotor({ id, label, value, min, max, step, labels, childr
       const degrees = -60 + i * 2.4, a = degrees * Math.PI / 180, major = i % 10 === 0;
       const inner = major ? 132 : i % 5 === 0 ? 140 : 146, x = 180 + Math.sin(a) * 110, y = 180 - Math.cos(a) * 110;
       return <g key={i}><line x1={svgNumber(180 + Math.sin(a) * inner)} y1={svgNumber(180 - Math.cos(a) * inner)} x2={svgNumber(180 + Math.sin(a) * 155)} y2={svgNumber(180 - Math.cos(a) * 155)} stroke="currentColor" strokeWidth={major ? 2 : 1} opacity={major ? 1 : .55} />{major && i <= 50 && (id === 'zoom-knob' ? <text className="zoom-scale-label" x={svgNumber(x)} y={svgNumber(y)} textAnchor="middle" dominantBaseline="middle">{labels[i / 10]}</text> : <text transform={`translate(${svgNumber(x)} ${svgNumber(y)}) rotate(${svgNumber(degrees)})`} textAnchor="middle" dominantBaseline="middle">{labels[i / 10]}</text>)}</g>;
-    })}</g></g><path className="dial-hit-area" d="M45.77 102.5 A155 155 0 0 1 314.23 102.5" fill="none" stroke="transparent" strokeWidth="74" /><g className="half-indicator"><line x1="180" y1="9" x2="180" y2="51" stroke="currentColor" strokeWidth="3" /><path d="M175 7 L185 7 L180 14 Z" fill="currentColor" /></g></svg><span className="half-readout">{children}</span>
+    })}</g></g>{progress && <g className="dial-progress"><path className="dial-progress-track" d={arc(1)} />{progress.loaded > 0 && <path className="dial-progress-loaded" d={arc(progress.loaded)} />}{progress.cleaned > 0 && <path className="dial-progress-cleaned" d={arc(progress.cleaned)} />}</g>}<path className="dial-hit-area" d="M45.77 102.5 A155 155 0 0 1 314.23 102.5" fill="none" stroke="transparent" strokeWidth="74" /><g className="half-indicator"><line x1="180" y1="9" x2="180" y2="51" stroke="currentColor" strokeWidth="3" /><path d="M175 7 L185 7 L180 14 Z" fill="currentColor" /></g></svg><span className="half-readout">{children}</span>
   </div>;
 }

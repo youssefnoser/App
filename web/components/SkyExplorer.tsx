@@ -1,25 +1,16 @@
 'use client';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import {
-  targets as initialTargets,
-  MIN_ZOOM,
-  MAX_ZOOM,
-  getNextZoomIn,
-  getNextZoomOut,
-} from '@/lib/sky';
+import { targets as initialTargets } from '@/lib/sky';
 import { cachedFetch } from '@/js/frontend-cache.js';
-import type { BackendTimeline } from '@/js/backend-sky.js';
+import type { BackendTimeline, LoadProgress } from '@/js/backend-sky.js';
 import BandSelector from './BandSelector';
 import { getBandWavelength } from '@/lib/spectral';
+import { describeProgress } from '@/lib/load-progress';
 import Rotor from './Rotor';
+import ZoomRuler from './ZoomRuler';
 import SkyCanvas, { type SkyGoto, type SkyView } from './SkyCanvas';
 import ImageMath from './ImageMath';
-import {
-  GoogleMyLocationIcon,
-  GoogleLayersIcon,
-  GoogleZoomInIcon,
-  GoogleZoomOutIcon,
-} from './GoogleMapIcons';
+import { GoogleMyLocationIcon, GoogleLayersIcon } from './GoogleMapIcons';
 
 function SpaceTargetIcon({ type }: { type: string }) {
   if (type.includes('BROWN DWARF')) {
@@ -181,7 +172,33 @@ export default function SkyExplorer() {
     return () => clearInterval(timer);
   }, [playing, loop, speed, frameCount]);
   useEffect(() => { if (playing && frame === lastFrame && !loop) setPlaying(false); }, [frame, loop, playing, lastFrame]);
-  const onZoom = useCallback((value: number) => flyTo({ fovDeg: (5 / 60) / Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value)) }), [flyTo]);
+  const playState = useRef({ playing, frame, lastFrame, frameCount });
+  playState.current = { playing, frame, lastFrame, frameCount };
+  // Play from the start when stopped on the last step; a single step has nothing to blink.
+  const togglePlay = useCallback(() => {
+    const { playing, frame, lastFrame, frameCount } = playState.current;
+    if (!playing && frame === lastFrame) setFrame(0);
+    if (frameCount >= 2) setPlaying(!playing);
+  }, []);
+  // Space plays and pauses anywhere on the page except while typing. Handled on
+  // keydown and kept from the focused button too, which would otherwise click on keyup.
+  useEffect(() => {
+    const isSpace = (event: KeyboardEvent) => event.code === 'Space' || event.key === ' ';
+    const typing = (target: EventTarget | null) => target instanceof HTMLElement
+      && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+    const down = (event: KeyboardEvent) => {
+      if (!isSpace(event) || event.ctrlKey || event.metaKey || event.altKey || typing(event.target)) return;
+      event.preventDefault();
+      if (!event.repeat) togglePlay();
+    };
+    const up = (event: KeyboardEvent) => { if (isSpace(event) && !typing(event.target)) event.preventDefault(); };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+  }, [togglePlay]);
+  const onField = useCallback((arcmin: number) => flyTo({ fovDeg: arcmin / 60 }), [flyTo]);
+  const [progress, setProgress] = useState<LoadProgress | null>(null);
+  const status = describeProgress(progress);
   const onBands = useCallback((next: number[]) => { setBands(next); setSequenceWavelength(undefined); }, []);
   const onWavelength = useCallback((value: number) => {
     const nearest = Array.from({length:102}, (_, i) => i + 1).reduce((a, b) =>
@@ -420,6 +437,7 @@ export default function SkyExplorer() {
         sequenceWidth={sequenceWidth}
         onTimeline={onTimeline}
         onStatus={setMessage}
+        onProgress={setProgress}
         onView={onView}
         infrared={infrared}
         grid={grid}
@@ -481,34 +499,11 @@ export default function SkyExplorer() {
         </button>
       </div>
       <BandSelector selected={bands} onSelection={onBands} onOpenChange={setBandsOpen} wavelength={sequenceWavelength ?? getBandWavelength(bands[0] ?? 22)} width={sequenceWidth} onWavelength={onWavelength} onWidth={setSequenceWidth} />
-      <div className="map-bottom"><span>{(5 / zoom).toFixed(1)} arcmin</span><span>{message || 'SPHEREx observations'}</span></div>
+      <ZoomRuler field={5 / zoom} status={status} frames={frameCount} onChange={onField} />
       <section className="timeline rotary-console" aria-label="Sky controls">
-        <div className="zoom-section map-zoom-controls" aria-label="Zoom controls">
-          <button
-            type="button"
-            id="zoom-in"
-            aria-label="Zoom in"
-            title="Zoom in"
-            disabled={zoom >= MAX_ZOOM}
-            onClick={() => onZoom(getNextZoomIn(zoom))}
-          >
-            <GoogleZoomInIcon />
-          </button>
-          <div className="zoom-divider" />
-          <button
-            type="button"
-            id="zoom-out"
-            aria-label="Zoom out"
-            title="Zoom out"
-            disabled={zoom <= MIN_ZOOM}
-            onClick={() => onZoom(getNextZoomOut(zoom))}
-          >
-            <GoogleZoomOutIcon />
-          </button>
-        </div>
-        <><div className="knob-section time-section half-section"><Rotor id="time-knob" label="Observation frame" value={frame} min={0} max={Math.max(1, lastFrame)} step={1} labels={Array.from({length:6}, (_, i) => sequence.steps[Math.round(i * lastFrame / 5)]?.date.slice(5).replace('-', '/') ?? '--')} onChange={setFrame} onGrab={() => setPlaying(false)}><span>{sequence.steps[frame]?.date ?? 'Loading observations'}</span><small>FRAME {String(frameCount ? frame + 1 : 0).padStart(2, '0')} / {String(frameCount).padStart(2, '0')}</small></Rotor></div>
+        <><div className="knob-section time-section half-section"><Rotor id="time-knob" label="Observation frame" value={frame} min={0} max={Math.max(1, lastFrame)} step={1} labels={Array.from({length:6}, (_, i) => sequence.steps[Math.round(i * lastFrame / 5)]?.date.slice(5).replace('-', '/') ?? '--')} onChange={setFrame} onGrab={() => setPlaying(false)} progress={progress?.total ? status : undefined}><span>{sequence.steps[frame]?.date ?? (status.tone === 'idle' ? '—' : status.title)}</span><small>FRAME {String(frameCount ? frame + 1 : 0).padStart(2, '0')} / {String(frameCount).padStart(2, '0')}</small>{frameCount > 0 && <small className="load-status" data-tone={status.tone} title={status.detail}>{status.title}</small>}</Rotor></div>
         <div className="knob-section speed-section half-section"><Rotor id="speed-knob" label="Playback speed" value={speed} min={.5} max={3} step={.5} labels={['0.5×', '1×', '1.5×', '2×', '2.5×', '3×']} onChange={setSpeed}><span>{speed}×</span><small>PLAYBACK SPEED</small></Rotor></div>
-        <div className="playback-panel"><div className="playback-buttons"><button aria-label="Previous frame" onClick={() => { setPlaying(false); setFrame(Math.max(0, frame - 1)); }}>◀</button><button className="play" aria-label={playing ? 'Pause observations' : 'Play observations'} onClick={() => { if (!playing && frame === lastFrame) setFrame(0); if (frameCount >= 2) setPlaying(!playing); }}>{playing ? 'Ⅱ' : '▶'}</button><button aria-label="Next frame" onClick={() => { setPlaying(false); setFrame(Math.min(lastFrame, frame + 1)); }}>▶</button><button className={`loop${loop ? ' active' : ''}`} aria-label="Loop playback" aria-pressed={loop} onClick={() => setLoop(!loop)}>↻</button></div></div>
+        <div className="playback-panel"><div className="playback-buttons"><button aria-label="Previous frame" onClick={() => { setPlaying(false); setFrame(Math.max(0, frame - 1)); }}>◀</button><button className="play" aria-label={playing ? 'Pause observations' : 'Play observations'} aria-keyshortcuts="Space" title={playing ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay}>{playing ? 'Ⅱ' : '▶'}</button><button aria-label="Next frame" onClick={() => { setPlaying(false); setFrame(Math.min(lastFrame, frame + 1)); }}>▶</button><button className={`loop${loop ? ' active' : ''}`} aria-label="Loop playback" aria-pressed={loop} onClick={() => setLoop(!loop)}>↻</button></div></div>
         </>
       </section>
     </section>

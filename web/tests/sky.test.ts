@@ -1,33 +1,15 @@
 import assert from 'node:assert/strict';
-import {
-  detectorBands,
-  MIN_ZOOM,
-  getNextZoomIn,
-  getNextZoomOut,
-} from '../lib/sky.ts';
+import { detectorBands, MIN_ZOOM } from '../lib/sky.ts';
 import { svgNumber } from '../lib/rotor.ts';
 
-// Test zoom levels and steps
-assert.equal(getNextZoomIn(1.0), 1.4);
-assert.equal(getNextZoomOut(1.4), 1.0);
-assert.equal(getNextZoomOut(1.0), 0.6);
-assert.equal(getNextZoomOut(0.6), 0.4);
-assert.equal(getNextZoomOut(0.4), 0.25);
-assert.equal(getNextZoomOut(0.25), 0.1);
+// The widest zoom shows the 105 degree survey.
 assert.equal((5 / 60) / MIN_ZOOM, 105);
-let wide = 0.25;
-for (let i = 0; i < 20; i++) wide = getNextZoomOut(wide);
-assert.equal(wide, MIN_ZOOM);
-assert.equal(getNextZoomIn(MIN_ZOOM), 0.0015);
-assert.equal(getNextZoomIn(14.0), 20.0);
-assert.equal(getNextZoomIn(20.0), 25.0);
-assert.equal(getNextZoomIn(25.0), 25.0);
 
 const all = Array.from({ length: 6 }, (_, i) => detectorBands(i + 1)).flat();
 assert.deepEqual(all, Array.from({ length: 102 }, (_, i) => i + 1));
 assert.equal(new Set(all).size, 102);
 assert.equal(detectorBands(6)[16], 102);
-console.log('PASS: zoom ladder and six complete, non-overlapping 17-band detector groups.');
+console.log('PASS: widest zoom and six complete, non-overlapping 17-band detector groups.');
 // Exact differing server/client values reported in the hydration overlay.
 for (const [server, client] of [
   [75.95972443316481, 75.95972443316482],

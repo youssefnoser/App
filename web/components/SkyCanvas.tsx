@@ -5,7 +5,7 @@
 // explicit command (`goto`). Frames load through js/backend-sky.js.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { initSky, type Sky } from '@/js/sky.js';
-import { createBackendSky, type BackendTimeline } from '@/js/backend-sky.js';
+import { createBackendSky, type BackendTimeline, type LoadProgress } from '@/js/backend-sky.js';
 import { sequenceWindows } from '@/lib/backend-bands';
 
 export type SkyView = { ra: number; dec: number; fovDeg: number };
@@ -22,7 +22,9 @@ type Props = {
   sequenceWavelength?: number;
   sequenceWidth: number;
   onTimeline: (timeline: BackendTimeline) => void;
+  // Only when the sky view cannot start; frame loading reports through onProgress.
   onStatus: (status: string) => void;
+  onProgress: (progress: LoadProgress) => void;
   onView: (view: SkyView) => void;
   infrared: boolean;
   grid: boolean;
@@ -50,6 +52,7 @@ export default function SkyCanvas({
   sequenceWidth,
   onTimeline,
   onStatus,
+  onProgress,
   onView,
   infrared,
   grid,
@@ -61,8 +64,8 @@ export default function SkyCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const skyRef = useRef<Sky | null>(null);
   const backendRef = useRef<ReturnType<typeof createBackendSky> | null>(null);
-  const callbacks = useRef({ onTimeline, onStatus, onView });
-  callbacks.current = { onTimeline, onStatus, onView };
+  const callbacks = useRef({ onTimeline, onStatus, onProgress, onView });
+  callbacks.current = { onTimeline, onStatus, onProgress, onView };
   const targetRef = useRef(target);
   targetRef.current = target;
   const backgroundFrame = Math.max(0, (bands[0] ?? 1) - 1);
@@ -94,7 +97,8 @@ export default function SkyCanvas({
         applyExplorerLayers(sky);
         backendRef.current = createBackendSky(sky, {
           onTimeline: (timeline) => callbacks.current.onTimeline(timeline),
-          onStatus: (status) => callbacks.current.onStatus(status),
+          // Loading progress goes to the timeline and zoom ruler, not the message line.
+          onProgress: (progress) => callbacks.current.onProgress(progress),
           // Called on every animation frame in which the view moved.
           onView: (centre) => {
             placeMarker();

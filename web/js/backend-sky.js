@@ -23,7 +23,7 @@ export function frameAddress(sequence, uri, clean = false) {
 }
 
 export function createBackendSky(sky, {
-  onTimeline = () => {}, onStatus = () => {}, onView = () => {}, fetchFn = cachedFetch,
+  onTimeline = () => {}, onStatus = () => {}, onProgress = () => {}, onView = () => {}, fetchFn = cachedFetch,
   schedule = requestAnimationFrame, cancel = cancelAnimationFrame,
 } = {}) {
   const {stel, layer} = sky;
@@ -50,6 +50,25 @@ export function createBackendSky(sky, {
   const frames = new Map(), metadata = new Map(); // frames: key -> box; metadata: uri -> X-Frame-Meta
   const boxes = new Map(); // cell -> {ra, dec, fov, bandKey}: every box asked for so far
   const report = (message) => { if (!disposed) onStatus(message); };
+  // Loading progress as numbers, for the timeline and zoom controls. phase is one of
+  // zoomed-out, hidden, finding, loading, cleaning, ready, failed, empty, error.
+  // cleaned counts the frames of the box on screen that show the median of their
+  // neighbours instead of the single exposure.
+  const progress = (phase, done = 0, total = 0, failed = 0, cleaned = 0) => {
+    if (!disposed) onProgress({phase, done, total, failed, cleaned});
+  };
+  function reportProgress() {
+    if (disposed || !view || !loader) return;
+    const {done, total, failed} = loader.stats;
+    let cleaned = 0;
+    if (fill) for (const {uri} of view.exposures) {
+      const key = `${view.cell}|${uri}`, sequence = frames.get(key);
+      if (sequence && applied.get(key) === frameAddress(sequence, uri, true)) cleaned++;
+    }
+    progress(!total ? 'empty' : done + failed < total ? 'loading'
+      : fill && (upgrades.length || upgrading) ? 'cleaning' : failed ? 'failed' : 'ready',
+    done, total, failed, cleaned);
+  }
   function writeHash(index) {
     const centre = sky.viewCentre();
     const hash = toHash({...centre,fov:sky.fovDeg(),step:index});
@@ -128,6 +147,7 @@ export function createBackendSky(sky, {
     report(failed ? `${done} of ${total} frames loaded. ${failed} failed. Recenter to retry.` :
       done < total ? `Loading SPHEREx frames: ${done} of ${total}.` :
       total ? `${done} SPHEREx frames loaded.` : 'No SPHEREx exposures in the selected bands here.');
+    reportProgress();
   }
   function pumpUpgrades() {
     if (disposed || !fill || !loader || loader.stats.done + loader.stats.failed < loader.stats.total) return;
@@ -147,7 +167,10 @@ export function createBackendSky(sky, {
         const entry=photos.entries.get(item.key);
         if(entry) entry.assetKey=url;
         notify();
-      }).catch(()=>{}).finally(()=>{upgrading--;pumpUpgrades();});
+      }).catch(()=>{}).finally(()=>{
+        upgrading--;pumpUpgrades();
+        if (!upgrading && !upgrades.length) reportProgress(); // the last one ends the cleaning phase
+      });
     }
   }
   function makeLoader(token) {
@@ -183,11 +206,11 @@ export function createBackendSky(sky, {
     // timeline and current step carry over until its answer arrives.
     upgrades=[];
     lastRequest = {...centre,fov};
-    if (fov >= LOAD_FOV_DEG || !visible) {steps=[];view=null;onTimeline({steps:[],index:0});writeHash(0);report(visible ? 'Zoom in to load SPHEREx frames for this part of the sky.' : 'Showing the SPHEREx all-sky background.');return;}
-    report('Finding SPHEREx exposures for the selected bands.');
+    if (fov >= LOAD_FOV_DEG || !visible) {steps=[];view=null;onTimeline({steps:[],index:0});writeHash(0);report(visible ? 'Zoom in to load SPHEREx frames for this part of the sky.' : 'Showing the SPHEREx all-sky background.');progress(visible ? 'zoomed-out' : 'hidden');return;}
+    report('Finding SPHEREx exposures for the selected bands.');progress('finding');
     // aspect is the canvas diagonal divided by its short side.
     const boxFov = reuse ? reuse.fov : frameBox(fov, Math.sqrt(Math.max(0, aspect * aspect - 1)), 1);
-    if (boxFov == null) {report('Zoom in to load SPHEREx frames for this part of the sky.');return;}
+    if (boxFov == null) {report('Zoom in to load SPHEREx frames for this part of the sky.');progress('zoomed-out');return;}
     if (reuse) centre = {ra:reuse.ra, dec:reuse.dec};
     // The box being asked for. The settle check tests coverage against this one,
     // not the box still on screen, so it is requested once while it loads.
@@ -227,7 +250,7 @@ export function createBackendSky(sky, {
     } catch(error) {
       if(disposed || token!==generation || signal.aborted) return;
       request.abort();
-      report('The SPHEREx backend did not answer. Recenter to try again.');
+      report('The SPHEREx backend did not answer. Recenter to try again.');progress('error');
     }
   }
   function tick(now) {
@@ -299,6 +322,7 @@ export function createBackendSky(sky, {
           upgrades.push({item,token:generation});
         }
       }
+      reportProgress();
     },
     showFrame(index) {
       const step=steps[index] ?? steps[0];
