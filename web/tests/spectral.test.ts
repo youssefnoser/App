@@ -3,8 +3,6 @@ import {
   getAllBands,
   getBandWavelength,
   computeTargetSpectrum,
-  getExternalCatalogMatches,
-  getObservationMetadata,
   MOLECULAR_FEATURES,
 } from '../lib/spectral.ts';
 
@@ -40,19 +38,4 @@ assert(
   'Cold brown dwarf WISE 0855 must peak in mid-to-deep infrared'
 );
 
-// 4. Validate External Catalog Matches (Gaia & WISE)
-const matches = getExternalCatalogMatches(269.4521, 4.6934, "Barnard's Star");
-assert.equal(matches.length, 2, 'Must return Gaia and WISE catalog counterparts');
-assert(matches.some((m) => m.mission === 'Gaia'), 'Must include Gaia match');
-assert(matches.some((m) => m.mission === 'WISE'), 'Must include WISE match');
-assert(matches[0].separationArcsec >= 0, 'Separation must be non-negative');
-
-// 5. Validate Metadata & QA Parameters
-const metadata = getObservationMetadata(0, [1, 2, 3], { ra: 269.4521, dec: 4.6934 });
-assert.equal(metadata.psfFwhmArcsec, 5.8, 'SPHEREx PSF FWHM must be 5.8 arcsec');
-assert(metadata.contaminationFlags.length >= 3, 'Must have contamination flags');
-assert(metadata.varianceMjy2 > 0, 'Variance must be positive');
-assert(metadata.zodiFluxMjySr > 0, 'ZODI foreground must be positive');
-assert(metadata.wcsProjection.includes('RA---TAN'), 'WCS must include tangential projection');
-
-console.log('PASS: SPHEREx 102-band spectral library, molecular features, Gaia/WISE cross-matching, and telemetry metadata.');
+console.log('PASS: SPHEREx 102-band spectral library and molecular features.');

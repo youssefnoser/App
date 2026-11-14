@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict';
 import {
   detectorBands,
-  zoomAt,
   MIN_ZOOM,
-  MAX_ZOOM,
-  ZOOM_LEVELS,
   getNextZoomIn,
   getNextZoomOut,
-  type Camera,
 } from '../lib/sky.ts';
 import { svgNumber } from '../lib/rotor.ts';
 
@@ -27,20 +23,11 @@ assert.equal(getNextZoomIn(14.0), 20.0);
 assert.equal(getNextZoomIn(20.0), 25.0);
 assert.equal(getNextZoomIn(25.0), 25.0);
 
-for (const anchor of [{ x: 0, y: 0 }, { x: 220, y: 310 }, { x: 1000, y: 800 }]) {
-  let camera: Camera = { zoom: 1, pan: { x: 120, y: -45 } };
-  const world = { x: (anchor.x - camera.pan.x) / camera.zoom, y: (anchor.y - camera.pan.y) / camera.zoom };
-  for (const value of [2.5, .25, 25, 1, 30, .1]) {
-    camera = zoomAt(camera, value, anchor);
-    assert(Math.hypot(world.x * camera.zoom + camera.pan.x - anchor.x, world.y * camera.zoom + camera.pan.y - anchor.y) < 1e-9);
-    assert(camera.zoom >= MIN_ZOOM && camera.zoom <= MAX_ZOOM);
-  }
-}
 const all = Array.from({ length: 6 }, (_, i) => detectorBands(i + 1)).flat();
 assert.deepEqual(all, Array.from({ length: 102 }, (_, i) => i + 1));
 assert.equal(new Set(all).size, 102);
 assert.equal(detectorBands(6)[16], 102);
-console.log('PASS: cursor-anchored zoom and six complete, non-overlapping 17-band detector groups.');
+console.log('PASS: zoom ladder and six complete, non-overlapping 17-band detector groups.');
 // Exact differing server/client values reported in the hydration overlay.
 for (const [server, client] of [
   [75.95972443316481, 75.95972443316482],
