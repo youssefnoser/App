@@ -1,8 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
-  dates,
-  targets,
+  targets as initialTargets,
   zoomAt,
   MIN_ZOOM,
   MAX_ZOOM,
@@ -11,6 +10,8 @@ import {
   type Camera,
   type Point,
 } from '@/lib/sky';
+import { cachedFetch } from '@/js/frontend-cache.js';
+import type { BackendTimeline } from '@/js/backend-sky.js';
 import BandSelector from './BandSelector';
 import Rotor from './Rotor';
 import SkyCanvas from './SkyCanvas';
@@ -72,6 +73,41 @@ export type SearchHistoryItem = {
 };
 
 export default function SkyExplorer() {
+  const [targets, setTargets] = useState(initialTargets);
+  const [sequence, setSequence] = useState<BackendTimeline>({steps:[],index:0});
+  const savedStep = useRef<number | null>(null);
+  const sequenceRef = useRef(sequence);
+  sequenceRef.current = sequence;
+  const frameCount = sequence.steps.length;
+  const lastFrame = Math.max(0, frameCount - 1);
+  const onTimeline = useCallback((next: BackendTimeline) => {
+    setSequence(next);
+    if (savedStep.current !== null && next.steps.length > savedStep.current) {
+      setFrame(savedStep.current);
+      savedStep.current = null;
+    } else setFrame(next.index);
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    const hasInitialPosition = new URLSearchParams(location.search).has('ra') || location.hash.includes('ra=');
+    cachedFetch('/api/targets', {signal:controller.signal}).then(async response => {
+      if (!response.ok) throw Error('Targets unavailable');
+      const live = await response.json();
+      if (!Array.isArray(live)) throw Error('Invalid target list');
+      const normalize = (name: string) => name.toLowerCase().replaceAll(String.fromCharCode(8217), '').replaceAll("'", '');
+      const updated = initialTargets.map(target => {
+        const match = live.find(item => typeof item.name === 'string' && normalize(item.name) === normalize(target.name));
+        return match && Number.isFinite(match.ra) && match.ra >= 0 && match.ra < 360 && Number.isFinite(match.dec) && Math.abs(match.dec) <= 90 ? {...target,ra:match.ra,dec:match.dec} : target;
+      });
+      if (controller.signal.aborted) return;
+      setTargets(updated);
+      if (!hasInitialPosition && !new URLSearchParams(location.search).has('ra')) {
+        setCoordinates({ra:updated[0].ra,dec:updated[0].dec});
+        setViewCoordinates({ra:updated[0].ra,dec:updated[0].dec});
+      }
+    }).catch(() => {});
+    return () => controller.abort();
+  }, []);
   const [searchOpen, setSearchOpen] = useState(false), [query, setQuery] = useState(''), [message, setMessage] = useState('');
   const [history, setHistory] = useState<SearchHistoryItem[]>([]);
   useEffect(() => {
@@ -117,10 +153,11 @@ export default function SkyExplorer() {
     document.addEventListener('pointerdown', outside); return () => document.removeEventListener('pointerdown', outside);
   }, []);
   useEffect(() => {
-    const params = new URLSearchParams(location.search), a = params.get('ra'), d = params.get('dec');
-    const fov = Number(params.get('fov')), epoch = Number(params.get('frame'));
-    if (params.has('fov') && Number.isFinite(fov) && fov > 0) setCamera({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, 5 / fov)), pan: { x: 0, y: 0 } });
-    if (params.has('frame') && Number.isInteger(epoch) && epoch >= 0 && epoch <= 5) setFrame(epoch);
+    const fromHash = location.hash.includes('ra=');
+    const params = new URLSearchParams(fromHash ? location.hash.slice(1) : location.search), a = params.get('ra'), d = params.get('dec');
+    const fov = Number(params.get('fov')), epoch = Number(params.get(fromHash ? 'step' : 'frame'));
+    if (params.has('fov') && Number.isFinite(fov) && fov > 0) setCamera({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, 5 / (fromHash ? fov * 60 : fov))), pan: { x: 0, y: 0 } });
+    if (params.has(fromHash ? 'step' : 'frame') && Number.isInteger(epoch) && epoch >= 0) { savedStep.current = epoch; setFrame(epoch); }
     if (a !== null && d !== null && a.trim() && d.trim() && Number.isFinite(+a) && Number.isFinite(+d) && +a >= 0 && +a < 360 && +d >= -90 && +d <= 90) {
       setCoordinates({ ra: +a, dec: +d });
       setViewCoordinates({ ra: +a, dec: +d });
@@ -128,14 +165,15 @@ export default function SkyExplorer() {
     }
   }, []);
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || frameCount < 2) return;
     const timer = setInterval(() => setFrame(current => {
-      if (current === 5 && !loop) return current;
-      return (current + 1) % 6;
+      const count = sequenceRef.current.steps.length;
+      if (!count || (current === count - 1 && !loop)) return current;
+      return (current + 1) % count;
     }), 600 / speed);
     return () => clearInterval(timer);
-  }, [playing, loop, speed]);
-  useEffect(() => { if (playing && frame === 5 && !loop) setPlaying(false); }, [frame, loop, playing]);
+  }, [playing, loop, speed, frameCount]);
+  useEffect(() => { if (playing && frame === lastFrame && !loop) setPlaying(false); }, [frame, loop, playing, lastFrame]);
   const onZoom = useCallback((value: number, anchor?: Point) => setCamera(current => zoomAt(current, value, anchor ?? { x: size.x / 2, y: size.y / 2 })), [size]);
   const onPan = useCallback((pan: Point) => setCamera(current => ({ ...current, pan })), []);
   const onResize = useCallback((next: Point) => setSize(next), []);
@@ -187,6 +225,8 @@ export default function SkyExplorer() {
     const url = new URL(location.href);
     url.searchParams.set('ra', String(a));
     url.searchParams.set('dec', String(d));
+    url.hash = '';
+    savedStep.current = null;
     window.history.replaceState(null, '', url);
     setCamera({ zoom: 1, pan: { x: 0, y: 0 } });
     setFrame(0);
@@ -205,7 +245,7 @@ export default function SkyExplorer() {
       dec: target.dec,
     });
     setQuery('');
-    setMessage(`Exploring ${target.name} - simulated observations`);
+    setMessage(`Exploring ${target.name}`);
     setSearchOpen(false);
   }
 
@@ -250,9 +290,9 @@ export default function SkyExplorer() {
   const readout = viewCoordinates;
   return <main>
     <div
-      className={`search-dock${searchOpen || query ? ' is-searching' : ''}${bandsOpen || advancedOpen ? ' dock-hidden' : ''}`}
+      className={`search-dock${searchOpen || query ? ' is-searching' : ''}${advancedOpen ? ' dock-hidden' : ''}`}
       ref={searchDock}
-      style={bandsOpen || advancedOpen ? { opacity: 0, pointerEvents: 'none', visibility: 'hidden' } : undefined}
+      style={advancedOpen ? { opacity: 0, pointerEvents: 'none', visibility: 'hidden' } : undefined}
       onKeyDown={event => { if (event.key === 'Escape') { setSearchOpen(false); searchInput.current?.focus(); } }}
     >
       <form onSubmit={search}>
@@ -361,12 +401,16 @@ export default function SkyExplorer() {
         <p id="search-coordinate-hint" className="search-coordinate-hint">Search a name or enter coordinates in degrees, e.g. 269.4521, +4.6934</p>
       </div>
     </div>
-    <section className="sky" aria-label="Interactive simulated sky map">
+    <section className="sky" aria-label="Interactive sky map">
       <SkyCanvas
         camera={camera}
         frame={frame}
         selected={selected}
         bandCount={bands.length}
+        bands={bands}
+        observationMjd={sequence.steps[frame]?.mjd}
+        onTimeline={onTimeline}
+        onStatus={setMessage}
         infrared={infrared}
         grid={grid}
         name={target?.name ?? `${coordinates.ra.toFixed(4)}°, ${coordinates.dec >= 0 ? '+' : ''}${coordinates.dec.toFixed(4)}°`}
@@ -391,8 +435,8 @@ export default function SkyExplorer() {
             wiseEnabled={wiseEnabled}
             onToggleGaia={() => setGaiaEnabled(!gaiaEnabled)}
             onToggleWise={() => setWiseEnabled(!wiseEnabled)}
-            onSelectBand={(b) => setBands([b])}
-            onSelectBands={(bs) => setBands(bs)}
+            onSelectBand={(b) => onBands([b])}
+            onSelectBands={onBands}
             onSelectCoords={(ra, dec) => updateCoordinates(ra, dec)}
             onOpenChange={setAdvancedOpen}
           />
@@ -436,8 +480,8 @@ export default function SkyExplorer() {
           W
         </button>
       </div>
-      <BandSelector onSelection={onBands} onOpenChange={setBandsOpen} />
-      <div className="map-bottom"><span>{(5 / camera.zoom).toFixed(1)} arcmin</span><span>Illustrative star field / Not for scientific analysis</span></div>
+      <BandSelector selected={bands} onSelection={onBands} onOpenChange={setBandsOpen} />
+      <div className="map-bottom"><span>{(5 / camera.zoom).toFixed(1)} arcmin</span><span>{message || 'SPHEREx observations'}</span></div>
       <section className="timeline rotary-console" aria-label="Sky controls">
         <div className="zoom-section map-zoom-controls" aria-label="Zoom controls">
           <button
@@ -462,9 +506,9 @@ export default function SkyExplorer() {
             <GoogleZoomOutIcon />
           </button>
         </div>
-        <><div className="knob-section time-section half-section"><Rotor id="time-knob" label="Observation frame" value={frame} min={0} max={5} step={1} labels={['JUN 25', 'DEC 25', 'JUN 26', 'DEC 26', 'JUN 27', 'DEC 27']} onChange={setFrame} onGrab={() => setPlaying(false)}><span>{dates[frame]}</span><small>FRAME {String(frame + 1).padStart(2, '0')} / 06</small></Rotor></div>
+        <><div className="knob-section time-section half-section"><Rotor id="time-knob" label="Observation frame" value={frame} min={0} max={Math.max(1, lastFrame)} step={1} labels={Array.from({length:6}, (_, i) => sequence.steps[Math.round(i * lastFrame / 5)]?.date.slice(5).replace('-', '/') ?? '--')} onChange={setFrame} onGrab={() => setPlaying(false)}><span>{sequence.steps[frame]?.date ?? 'Loading observations'}</span><small>FRAME {String(frameCount ? frame + 1 : 0).padStart(2, '0')} / {String(frameCount).padStart(2, '0')}</small></Rotor></div>
         <div className="knob-section speed-section half-section"><Rotor id="speed-knob" label="Playback speed" value={speed} min={.5} max={3} step={.5} labels={['0.5×', '1×', '1.5×', '2×', '2.5×', '3×']} onChange={setSpeed}><span>{speed}×</span><small>PLAYBACK SPEED</small></Rotor></div>
-        <div className="playback-panel"><div className="playback-buttons"><button aria-label="Previous frame" onClick={() => { setPlaying(false); setFrame(Math.max(0, frame - 1)); }}>◀</button><button className="play" aria-label={playing ? 'Pause observations' : 'Play observations'} onClick={() => { if (!playing && frame === 5) setFrame(0); setPlaying(!playing); }}>{playing ? 'Ⅱ' : '▶'}</button><button aria-label="Next frame" onClick={() => { setPlaying(false); setFrame(Math.min(5, frame + 1)); }}>▶</button><button className={`loop${loop ? ' active' : ''}`} aria-label="Loop playback" aria-pressed={loop} onClick={() => setLoop(!loop)}>↻</button></div></div>
+        <div className="playback-panel"><div className="playback-buttons"><button aria-label="Previous frame" onClick={() => { setPlaying(false); setFrame(Math.max(0, frame - 1)); }}>◀</button><button className="play" aria-label={playing ? 'Pause observations' : 'Play observations'} onClick={() => { if (!playing && frame === lastFrame) setFrame(0); if (frameCount >= 2) setPlaying(!playing); }}>{playing ? 'Ⅱ' : '▶'}</button><button aria-label="Next frame" onClick={() => { setPlaying(false); setFrame(Math.min(lastFrame, frame + 1)); }}>▶</button><button className={`loop${loop ? ' active' : ''}`} aria-label="Loop playback" aria-pressed={loop} onClick={() => setLoop(!loop)}>↻</button></div></div>
         </>
       </section>
     </section>

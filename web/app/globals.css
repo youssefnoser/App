@@ -2714,3 +2714,75 @@ html, body, main, .sky {
     width: calc(100vw - 80px) !important;
   }
 }
+
+
+/* Floating band sidebar: keep the sky and its other controls accessible. */
+.sky .band-control.is-open { z-index: 30; }
+#bands-panel.bands-sidebar {
+  position: fixed;
+  inset: 80px 16px 76px auto;
+  width: min(410px, calc(100vw - 32px));
+  max-width: none;
+  max-height: none;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(192, 132, 252, .32);
+  border-radius: 16px;
+  background: rgba(5, 8, 16, .96);
+  backdrop-filter: blur(24px);
+  box-shadow: 0 18px 50px #0009;
+  transform: translateX(24px);
+  transform-origin: right center;
+}
+.band-control.is-open #bands-panel.bands-sidebar { transform: translateX(0); }
+#bands-panel.bands-sidebar .band-tray-heading {
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0;
+}
+#bands-panel.bands-sidebar .band-tray-heading h2 { margin: 6px 0 0; }
+#bands-panel.bands-sidebar .band-tray-heading h2 > span {
+  display: block;
+  margin: 7px 0 0;
+  font-size: 10px;
+  line-height: 1.6;
+}
+#bands-panel.bands-sidebar #bands-close { width: 36px; height: 36px; }
+#bands-panel.bands-sidebar .band-picker-large-view {
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #756096 #111b2d;
+  padding: 0 4px 4px 0;
+  margin: 0;
+}
+#bands-panel.bands-sidebar .picker-detector-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+#bands-panel.bands-sidebar .picker-det-tab { min-height: 68px; }
+#bands-panel.bands-sidebar .det-tab-range { font-size: 9px; }
+#bands-panel.bands-sidebar .picker-bands-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+#bands-panel.bands-sidebar .picker-actions-bar { display: flex; flex-direction: column; gap: 8px; }
+#bands-panel.bands-sidebar .picker-action-btn { min-height: 40px; }
+#bands-panel.bands-sidebar .band-tray-footer { flex: 0 0 auto; flex-direction: column; align-items: flex-start; gap: 5px; }
+@media (max-width: 600px) {
+  #bands-panel.bands-sidebar { inset: 72px 12px 70px auto; width: calc(100vw - 24px); padding: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #bands-panel.bands-sidebar, .band-control.is-open #bands-panel.bands-sidebar { transform: none; }
+}
+
+#bands-panel.band-counter-sidebar { bottom: auto; height: auto; min-height: 0; }
+.band-counter-form { display: flex; flex-direction: column; gap: 12px; }
+.band-counter-form label { color: #c9d8ea; font-size: 12px; }
+.band-counter-controls { display: grid; grid-template-columns: 44px 1fr 44px; gap: 8px; }
+.band-counter-controls button, .band-counter-controls input { min-height: 44px; border: 1px solid #4a607c; border-radius: 8px; background: #142337; color: #eff6ff; text-align: center; font-size: 18px; }
+.band-counter-controls button:disabled { opacity: .4; }
+.band-counter-controls input { width: 100%; }
+.band-counter-form p { margin: 0; color: #bdd1e8; font-size: 12px; line-height: 1.5; }
+.band-counter-form p[role=status] { color: #c4a8f5; }

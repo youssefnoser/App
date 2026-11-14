@@ -1,5 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createBackendSky, pointSky, readSkyCentre, HIPS, type BackendTimeline } from '@/js/backend-sky.js';
+import { selectedBandWindows } from '@/lib/backend-bands';
 import { MIN_ZOOM, MAX_ZOOM, type Camera, type Point } from '@/lib/sky';
 
 type Props = {
@@ -7,6 +9,10 @@ type Props = {
   frame: number;
   selected: number;
   bandCount: number;
+  bands?: number[];
+  observationMjd?: number;
+  onTimeline?: (timeline: BackendTimeline) => void;
+  onStatus?: (status: string) => void;
   infrared: boolean;
   grid: boolean;
   name: string;
@@ -20,15 +26,6 @@ type Props = {
   onPan: (pan: Point) => void;
   onResize: (size: Point) => void;
 };
-
-const epochDates = [
-  new Date('2025-06-01T00:00:00Z'),
-  new Date('2025-12-01T00:00:00Z'),
-  new Date('2026-06-01T00:00:00Z'),
-  new Date('2026-12-01T00:00:00Z'),
-  new Date('2027-06-01T00:00:00Z'),
-  new Date('2027-12-01T00:00:00Z'),
-];
 
 let engineScriptPromise: Promise<any> | null = null;
 function loadEngineScript(): Promise<any> {
@@ -68,11 +65,8 @@ function projectSkyToScreen(
   if (!stel?.core?.observer) return null;
 
   try {
-    const raRad = (raDeg * Math.PI) / 180;
-    const decRad = (decDeg * Math.PI) / 180;
-    const cx = Math.cos(decRad) * Math.cos(raRad);
-    const cy = Math.cos(decRad) * Math.sin(raRad);
-    const cz = Math.sin(decRad);
+    const astrom = stel.s2c(raDeg * Math.PI / 180, decDeg * Math.PI / 180);
+    const [cx, cy, cz] = stel.convertFrame(stel.observer, 'ASTROM', 'CIRS', astrom);
 
     const yaw = stel.core.observer.yaw;
     const pitch = stel.core.observer.pitch;
@@ -123,6 +117,10 @@ export default function SkyCanvas({
   camera,
   frame,
   bandCount,
+  bands = [1],
+  observationMjd,
+  onTimeline,
+  onStatus,
   infrared,
   grid,
   name,
@@ -139,7 +137,12 @@ export default function SkyCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const stelRef = useRef<any>(null);
+  const backendRef = useRef<ReturnType<typeof createBackendSky> | null>(null);
+  const callbackRef = useRef({ onTimeline, onStatus });
+  callbackRef.current = { onTimeline, onStatus };
+  const sizeRef = useRef({ width: 1, height: 1 });
   const [size, setSize] = useState({ width: 1, height: 1 });
+  sizeRef.current = size;
   const [ready, setReady] = useState(false);
   const [reticlePos, setReticlePos] = useState<{ x: number; y: number; visible: boolean }>({
     x: 0,
@@ -163,25 +166,18 @@ export default function SkyCanvas({
   const updateReticlePosition = useCallback(() => {
     const stel = stelRef.current;
     if (!stel?.core?.observer) return;
-    const w = size.width > 1 ? size.width : (typeof window !== 'undefined' ? window.innerWidth : 800);
-    const h = size.height > 1 ? size.height : (typeof window !== 'undefined' ? window.innerHeight : 600);
-    const pos = projectSkyToScreen(stel, coordinates.ra, coordinates.dec, w, h);
+    const w = sizeRef.current.width > 1 ? sizeRef.current.width : (typeof window !== 'undefined' ? window.innerWidth : 800);
+    const h = sizeRef.current.height > 1 ? sizeRef.current.height : (typeof window !== 'undefined' ? window.innerHeight : 600);
+    const pos = projectSkyToScreen(stel, coordinatesRef.current.ra, coordinatesRef.current.dec, w, h);
     if (pos) {
       setReticlePos(pos);
     }
-  }, [coordinates.ra, coordinates.dec, size.width, size.height]);
+  }, []);
 
   const pointToTarget = (stel: any, coords: { ra: number; dec: number }) => {
     if (!stel?.core) return;
-    const raRad = (coords.ra * Math.PI) / 180;
-    const decRad = (coords.dec * Math.PI) / 180;
-    const normYaw = raRad > Math.PI ? raRad - 2 * Math.PI : raRad;
-
     isUpdatingFromInternal.current = true;
-    if (stel.core.observer) {
-      stel.core.observer.yaw = normYaw;
-      stel.core.observer.pitch = decRad;
-    }
+    pointSky(stel, coords);
     setTimeout(() => {
       isUpdatingFromInternal.current = false;
       updateReticlePosition();
@@ -249,13 +245,12 @@ export default function SkyCanvas({
             if (core.landscapes) core.landscapes.visible = false;
             core.mount_frame = stel.FRAME_ICRF ?? 1;
 
-            // Star field fidelity & brightness
-            core.star_linear_scale = 1.6;
-            core.star_relative_scale = 1.25;
-            core.display_limit_mag = 12.0;
-
-            if (core.milkyway) core.milkyway.visible = true;
-            if (core.dsos) core.dsos.visible = true;
+            // Use only the index.html survey and its backend observation layer.
+            // Do not load the former optical star, DSO, or Milky Way maps.
+            if (core.stars) core.stars.visible = false;
+            if (core.milkyway) core.milkyway.visible = false;
+            if (core.dsos) core.dsos.visible = false;
+            if (core.planets) core.planets.visible = false;
             if (core.constellations) {
               core.constellations.lines_visible = false;
               core.constellations.labels_visible = false;
@@ -263,25 +258,24 @@ export default function SkyCanvas({
             if (core.lines?.azimuthal) core.lines.azimuthal.visible = false;
             if (core.lines?.equatorial) core.lines.equatorial.visible = grid;
 
-            // Data sources
             const origin = window.location.origin;
-            const baseUrl = `${origin}/skydata/`;
-            try { core.stars?.addDataSource({ url: `${baseUrl}stars` }); } catch {}
-            try { core.dsos?.addDataSource({ url: `${baseUrl}dso` }); } catch {}
-            try { core.milkyway?.addDataSource({ url: `${baseUrl}surveys/milkyway` }); } catch {}
-            try { core.skycultures?.addDataSource({ url: `${baseUrl}skycultures/western`, key: 'western' }); } catch {}
-
             // Fonts
             try {
               stel.setFont('regular', `${origin}/fonts/Roboto-Regular.ttf`, 1.38);
               stel.setFont('bold', `${origin}/fonts/Roboto-Bold.ttf`, 1.38);
             } catch {}
 
-            // Observation epoch
-            const epochDate = epochDates[frame] || epochDates[0];
-            if (core.observer && typeof stel.date2MJD === 'function') {
-              core.observer.utc = stel.date2MJD(epochDate);
-            }
+            core.dss.visible = true;
+            core.dss.addDataSource({ url: HIPS });
+            core.dss.frame = 0;
+            backendRef.current = createBackendSky(stel, {
+              onTimeline: timeline => callbackRef.current.onTimeline?.(timeline),
+              onStatus: status => callbackRef.current.onStatus?.(status),
+              onView: centre => {
+                updateReticlePosition();
+                onCoordinatesChangeRef.current?.(centre);
+              },
+            });
 
             // Initial Target pointing
             const coords = coordinatesRef.current;
@@ -289,25 +283,29 @@ export default function SkyCanvas({
             pointToTarget(stel, coords);
 
             // Initial FOV
-            const fovRad = (50 / Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoomRef.current))) * (Math.PI / 180);
+            const fovRad = ((5 / 60) / Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoomRef.current))) * (Math.PI / 180);
             core.fov = fovRad;
 
             // Listen to observer movements / drag and zoom changes
             stel.change((_obj: any, attr: string) => {
+              if (!active) return;
               if (attr === 'yaw' || attr === 'pitch') {
                 updateReticlePosition();
                 if (isUserDragging.current && !isUpdatingFromInternal.current && core.observer) {
-                  let raDeg = ((core.observer.yaw * 180) / Math.PI) % 360;
-                  if (raDeg < 0) raDeg += 360;
-                  const decDeg = Math.max(-90, Math.min(90, (core.observer.pitch * 180) / Math.PI));
-                  onCoordinatesChangeRef.current?.({ ra: raDeg, dec: decDeg });
+                  onCoordinatesChangeRef.current?.(readSkyCentre(stel));
                 }
               } else if (attr === 'fov') {
                 updateReticlePosition();
                 if (!isUpdatingFromInternal.current && core.fov) {
                   const fovDeg = (core.fov * 180) / Math.PI;
-                  const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, 50 / fovDeg));
-                  if (Math.abs(newZoom - cameraZoomRef.current) > 0.05) {
+                  const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, (5 / 60) / fovDeg));
+                  const limitedFov = ((5 / 60) / newZoom) * Math.PI / 180;
+                  if (Math.abs(core.fov - limitedFov) > 1e-7) {
+                    isUpdatingFromInternal.current = true;
+                    stel.zoomTo(limitedFov, 0);
+                    isUpdatingFromInternal.current = false;
+                  }
+                  if (Math.abs(newZoom - cameraZoomRef.current) > 0.00001) {
                     onZoomRef.current(newZoom);
                   }
                 }
@@ -322,11 +320,15 @@ export default function SkyCanvas({
         });
       })
       .catch((err) => {
+        callbackRef.current.onStatus?.('The sky engine could not start. Reload to try again.');
         console.warn('Stellarium Web Engine loading notice:', err);
       });
 
     return () => {
       active = false;
+      backendRef.current?.destroy();
+      backendRef.current = null;
+      stelRef.current = null;
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
   }, [updateReticlePosition]);
@@ -336,18 +338,21 @@ export default function SkyCanvas({
     const stel = stelRef.current;
     if (stel && recenterTrigger !== undefined && recenterTrigger > 0) {
       pointToTarget(stel, coordinates);
+      backendRef.current?.retry();
     }
   }, [recenterTrigger]);
 
-  // Update observation epoch frame
+  // Existing frame rotor and playback now select actual loaded backend exposures.
   useEffect(() => {
-    const stel = stelRef.current;
-    if (stel?.core?.observer && typeof stel.date2MJD === 'function') {
-      const epochDate = epochDates[frame] || epochDates[0];
-      stel.core.observer.utc = stel.date2MJD(epochDate);
-    }
+    backendRef.current?.showFrame(frame);
     updateReticlePosition();
-  }, [frame, updateReticlePosition]);
+  }, [frame, observationMjd, ready, updateReticlePosition]);
+
+  const bandKey = bands.join(',');
+  useEffect(() => {
+    backendRef.current?.setBands(selectedBandWindows(bands), Math.max(0, (bands[0] ?? 1) - 1));
+  }, [bandKey, ready]);
+  useEffect(() => { backendRef.current?.setVisible(infrared); }, [infrared, ready]);
 
   // Update target coordinates
   useEffect(() => {
@@ -374,8 +379,8 @@ export default function SkyCanvas({
   useEffect(() => {
     const stel = stelRef.current;
     if (stel?.core) {
-      const fovRad = (50 / Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom))) * (Math.PI / 180);
-      if (Math.abs((stel.core.fov || 0) - fovRad) > 0.005) {
+      const fovRad = ((5 / 60) / Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom))) * (Math.PI / 180);
+      if (Math.abs((stel.core.fov || 0) - fovRad) > 1e-7) {
         isUpdatingFromInternal.current = true;
         if (typeof stel.zoomTo === 'function') {
           stel.zoomTo(fovRad, 0.1);
@@ -390,9 +395,9 @@ export default function SkyCanvas({
     }
   }, [camera.zoom, updateReticlePosition]);
 
-  // Proper motion offset across epochs for high proper-motion sources
-  const offsetX = (frame - 2.5) * 4;
-  const offsetY = -(frame - 2.5) * 2;
+  // Target marker stays fixed on the requested catalogue coordinates; motion is in the data.
+  const offsetX = 0;
+  const offsetY = 0;
   const labelX = (reticlePos.x || (size.width || 800) * 0.5) + offsetX;
   const labelY = (reticlePos.y || (size.height || 600) * 0.5) + offsetY;
   const isVisible = reticlePos.visible;
@@ -442,9 +447,7 @@ export default function SkyCanvas({
           width: '100%',
           height: '100%',
           display: 'block',
-          filter: infrared
-            ? `contrast(1.15) brightness(${0.92 + (bandCount / 102) * 0.25}) sepia(0.65) hue-rotate(305deg) saturate(1.5)`
-            : 'none',
+          filter: 'none',
           transition: 'filter 0.3s ease',
         }}
       />
