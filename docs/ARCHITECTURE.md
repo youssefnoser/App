@@ -65,7 +65,8 @@ Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6
 | `server/irsa.py` | `find_exposures()` |
 | `server/cutouts.py` | `fetch_cutout()` |
 | `server/mirror.py` | `fetch_exposure()` (whole file from the AWS mirror, trimmed, LRU cache with a size cap), `cut()` (local crop), `prefetch()` |
-| `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()` |
+| `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()`, `Catalog.status()` (for `/health`) |
+| `server/diskcache.py` | size cap (`SPHEREX_RENDER_CACHE_GB`, default 10) and expiry for `png/`, `grids/`, `cutouts/`, `tap/`: `prune()`, `touch()` |
 | `scripts/snapshot_metadata.py` | fill the snapshot from IRSA TAP in time windows, resumable (network) |
 | `server/footprint.py` | `exposure_from_head()`: time, detector, obs id and footprint from a file's first 28,800 bytes (hand-parsed TAN + SIP) |
 | `scripts/snapshot_from_aws.py` | fill the snapshot from the AWS mirror alone: list the bucket, read each file's header, resumable (network) |
