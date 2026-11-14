@@ -98,7 +98,7 @@ from `/engine/`.
 |------|----------------|
 | `web/js/sky.js` | Engine bootstrap shared by both pages: script loading, equatorial airless view, SPHEREx HiPS background, RA/Dec read/set, engine-matching screen projection for the target marker |
 | `web/public/engine/` | Committed copy of the engine build; `npm run sync-engine` (also run before `dev` and `build`) refreshes it from `vendor/stellarium-web-engine/build` |
-| `web/js/backend-sky.js` | Frame loading on the shared sky, reusing the legacy `Loader`, `PhotoCache`, timeline and hash format; sequence queries, progressive PNG loading, rolling medians, cancellation and north-up calibration. Frames are keyed per sequence box, so after a pan the earlier boxes stay on screen and the new box is added to them (as on `index.html`); the layer hides only when zoomed out past frame scale. The timeline lists only exposures every loaded box on screen can show (a box wholly inside another that has the exposure does not count), and a loaded box that still covers the view is asked for again instead of a new one, so the caches answer without a download |
+| `web/js/backend-sky.js` | Frame loading on the shared sky, reusing the legacy `Loader`, `PhotoCache`, timeline and hash format; sequence queries, progressive PNG loading, rolling medians, cancellation and north-up calibration. Frames are keyed per sequence box and earlier boxes stay loaded after a pan; the layer hides only when zoomed out past frame scale. The blink runs on one box: the loaded box that holds the whole canvas (most frames wins, the current box on a tie). Only that box is drawn and its exposures are the timeline, because two boxes drawn over each other sit on different pixel grids and shift the picture. Until the box being loaded has the exposure on screen (which it downloads first), every box on screen is drawn and the timeline carries over. The exposure the user chose is kept through reloads. A loaded box that still covers the view is asked for again instead of a new one, so the caches answer without a download |
 | `web/js/backend-sky.d.ts` | Typed adapter interface for React |
 | `web/lib/backend-bands.ts` | Map the existing selected bands into backend wavelength windows or detector queries |
 | `web/app/api/[...path]/route.ts` | Same-origin streaming proxy for the backend's target, view, patch, sequence and frame endpoints; preserves `X-Frame-Meta` |
@@ -123,7 +123,7 @@ and targets after one hour. Cache Storage keeps responses across reloads where
 supported; storage failures fall back to the bounded memory cache. Failed and
 aborted requests are not cached.
 
-`web/js/frame-assets.js` keeps up to 256 image blobs within 64 MiB. The engine uses
+`web/js/frame-assets.js` keeps up to 1024 image blobs within 64 MiB. It evicts a whole sequence box at a time, least recently used first, and never the box on screen, which alone may exceed the budget (a 1 deg box of 13 exposures is about 25 MB with the cleaned frames). The engine uses
 these Blob URLs instead of downloading each PNG again. Eviction removes the
 associated photo and revokes its URL; canvas disposal releases the remaining URLs.
 

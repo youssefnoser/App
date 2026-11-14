@@ -10,7 +10,7 @@ export class PhotoCache {
     this.cap = cap;
     // Map keeps insertion order; every ensure() re-inserts, so the first
     // entry is the least recently ensured.
-    this.entries = new Map(); // key -> {photo, uri}
+    this.entries = new Map(); // key -> {photo, uri, pix}
     this.current = null;
   }
 
@@ -35,7 +35,7 @@ export class PhotoCache {
         visible: false,
         instant: true,
       });
-      entry = { photo, uri };
+      entry = { photo, uri, pix };
     }
     this.entries.set(key, entry);
     this._trim(key);
@@ -64,12 +64,13 @@ export class PhotoCache {
 
   /**
    * Show exactly the photos of this uri and hide all others. A patch with no
-   * photo for the uri shows nothing.
+   * photo for the uri shows nothing. With `only` (a Set of patch numbers), the
+   * uri's photos on other patches stay hidden too.
    */
-  showOnly(uri) {
+  showOnly(uri, only = null) {
     this.current = uri;
     for (const entry of this.entries.values()) {
-      entry.photo.visible = entry.uri === uri;
+      entry.photo.visible = entry.uri === uri && (!only || only.has(entry.pix));
     }
   }
 

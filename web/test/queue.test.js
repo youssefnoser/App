@@ -264,3 +264,16 @@ test('setQueue ignores duplicate keys and concurrency is clamped', async () => {
   assert.equal(new Loader({ fetchFn, concurrency: 99 }).concurrency, 8);
   assert.equal(new Loader({ fetchFn, concurrency: 3.7 }).concurrency, 3);
 });
+
+test('isPending: true while an item waits or is being fetched, false once it settles or is dropped', async () => {
+  const release = {};
+  const loader = new Loader({ concurrency: 1, fetchFn: (item) => new Promise((resolve) => { release[item.key] = resolve; }) });
+  loader.setQueue([{ pix: 1, uri: 'a', key: '1|a' }, { pix: 1, uri: 'b', key: '1|b' }]);
+  assert.equal(loader.isPending('1|a'), true); // in flight
+  assert.equal(loader.isPending('1|b'), true); // waiting
+  release['1|a']();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(loader.isPending('1|a'), false); // done
+  loader.setQueue([]);
+  assert.equal(loader.isPending('1|b'), false); // dropped from the queue
+});
