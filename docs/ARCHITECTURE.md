@@ -134,3 +134,10 @@ Offline checks: `node --test "web/test/*.test.js"` from the project root and
 verification: `node scripts/check_band_cache.mjs` with Next.js at localhost:5173;
 `NEXT_CHECK_URL` overrides that address. The script checks cold/reload request
 counts, detector selections, Advanced sync, last-band protection and sidebar bounds.
+
+The Next.js sequence starts with the standalone viewer's wavelength window:
+1.25 micrometres, within 5 percent, with rolling-median fill enabled. The band
+picker exposes the sequence wavelength and tolerance. Choosing a band updates
+its centre; choosing Exact selected band uses its native channel window.
+The wider options explicitly include nearby wavelengths to provide more
+exposures for fill; they do not guarantee complete coverage for every exposure.

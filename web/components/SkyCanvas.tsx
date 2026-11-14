@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createBackendSky, pointSky, readSkyCentre, HIPS, type BackendTimeline } from '@/js/backend-sky.js';
-import { selectedBandWindows } from '@/lib/backend-bands';
+import { sequenceWindows } from '@/lib/backend-bands';
 import { MIN_ZOOM, MAX_ZOOM, type Camera, type Point } from '@/lib/sky';
 
 type Props = {
@@ -10,6 +10,8 @@ type Props = {
   selected: number;
   bandCount: number;
   bands?: number[];
+  sequenceWavelength?: number;
+  sequenceWidth?: number;
   observationMjd?: number;
   onTimeline?: (timeline: BackendTimeline) => void;
   onStatus?: (status: string) => void;
@@ -117,7 +119,9 @@ export default function SkyCanvas({
   camera,
   frame,
   bandCount,
-  bands = [1],
+  bands = [22],
+  sequenceWavelength,
+  sequenceWidth = .05,
   observationMjd,
   onTimeline,
   onStatus,
@@ -350,8 +354,8 @@ export default function SkyCanvas({
 
   const bandKey = bands.join(',');
   useEffect(() => {
-    backendRef.current?.setBands(selectedBandWindows(bands), Math.max(0, (bands[0] ?? 1) - 1));
-  }, [bandKey, ready]);
+    backendRef.current?.setBands(sequenceWindows(bands, sequenceWavelength, sequenceWidth), Math.max(0, (bands[0] ?? 1) - 1));
+  }, [bandKey, sequenceWavelength, sequenceWidth, ready]);
   useEffect(() => { backendRef.current?.setVisible(infrared); }, [infrared, ready]);
 
   // Update target coordinates

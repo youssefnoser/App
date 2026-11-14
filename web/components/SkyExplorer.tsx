@@ -13,6 +13,7 @@ import {
 import { cachedFetch } from '@/js/frontend-cache.js';
 import type { BackendTimeline } from '@/js/backend-sky.js';
 import BandSelector from './BandSelector';
+import { getBandWavelength } from '@/lib/spectral';
 import Rotor from './Rotor';
 import SkyCanvas from './SkyCanvas';
 import ImageMath from './ImageMath';
@@ -142,7 +143,9 @@ export default function SkyExplorer() {
   const [camera, setCamera] = useState<Camera>({ zoom: 1, pan: { x: 0, y: 0 } });
   const [size, setSize] = useState<Point>({ x: 1, y: 1 });
   const [frame, setFrame] = useState(0), [playing, setPlaying] = useState(false), [speed, setSpeed] = useState(1), [loop, setLoop] = useState(true);
-  const [infrared, setInfrared] = useState(true), [grid, setGrid] = useState(true), [bands, setBands] = useState<number[]>([1]);
+  const [infrared, setInfrared] = useState(true), [grid, setGrid] = useState(true), [bands, setBands] = useState<number[]>([22]);
+  const [sequenceWavelength, setSequenceWavelength] = useState<number | undefined>(1.25);
+  const [sequenceWidth, setSequenceWidth] = useState(.05);
   const [gaiaEnabled, setGaiaEnabled] = useState(false);
   const [wiseEnabled, setWiseEnabled] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -177,7 +180,12 @@ export default function SkyExplorer() {
   const onZoom = useCallback((value: number, anchor?: Point) => setCamera(current => zoomAt(current, value, anchor ?? { x: size.x / 2, y: size.y / 2 })), [size]);
   const onPan = useCallback((pan: Point) => setCamera(current => ({ ...current, pan })), []);
   const onResize = useCallback((next: Point) => setSize(next), []);
-  const onBands = useCallback((next: number[]) => setBands(next), []);
+  const onBands = useCallback((next: number[]) => { setBands(next); setSequenceWavelength(undefined); }, []);
+  const onWavelength = useCallback((value: number) => {
+    const nearest = Array.from({length:102}, (_, i) => i + 1).reduce((a, b) =>
+      Math.abs(getBandWavelength(a) - value) < Math.abs(getBandWavelength(b) - value) ? a : b);
+    setBands([nearest]);setSequenceWavelength(value);
+  }, []);
   function saveHistoryItem(item: { query: string; name?: string; type?: string; ra: number; dec: number }) {
     setHistory((prev) => {
       const filtered = prev.filter(
@@ -408,6 +416,8 @@ export default function SkyExplorer() {
         selected={selected}
         bandCount={bands.length}
         bands={bands}
+        sequenceWavelength={sequenceWavelength}
+        sequenceWidth={sequenceWidth}
         observationMjd={sequence.steps[frame]?.mjd}
         onTimeline={onTimeline}
         onStatus={setMessage}
@@ -480,7 +490,7 @@ export default function SkyExplorer() {
           W
         </button>
       </div>
-      <BandSelector selected={bands} onSelection={onBands} onOpenChange={setBandsOpen} />
+      <BandSelector selected={bands} onSelection={onBands} onOpenChange={setBandsOpen} wavelength={sequenceWavelength ?? getBandWavelength(bands[0] ?? 22)} width={sequenceWidth} onWavelength={onWavelength} onWidth={setSequenceWidth} />
       <div className="map-bottom"><span>{(5 / camera.zoom).toFixed(1)} arcmin</span><span>{message || 'SPHEREx observations'}</span></div>
       <section className="timeline rotary-console" aria-label="Sky controls">
         <div className="zoom-section map-zoom-controls" aria-label="Zoom controls">

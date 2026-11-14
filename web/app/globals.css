@@ -2786,3 +2786,18 @@ html, body, main, .sky {
 .band-counter-controls input { width: 100%; }
 .band-counter-form p { margin: 0; color: #bdd1e8; font-size: 12px; line-height: 1.5; }
 .band-counter-form p[role=status] { color: #c4a8f5; }
+
+/* Sequence wavelength controls share the band picker's dark form style. */
+.band-counter-form > input, .band-counter-form > select, .band-counter-form > button {
+  width: 100%; min-height: 42px; padding: 10px 12px; box-sizing: border-box;
+  border: 1px solid #4a607c; border-radius: 8px; background: #142337;
+  color: #eff6ff; font: inherit; font-size: 12px; color-scheme: dark;
+}
+.band-counter-form > button { cursor: pointer; background: #263650; }
+.band-counter-form > input:focus-visible, .band-counter-form > select:focus-visible,
+.band-counter-form > button:focus-visible { outline: 2px solid #9bbdff; outline-offset: 2px; }
+
+/* Keep band control SVGs centred independently of font glyph support. */
+.bands-toggle-icon, .bands-chevron { display: inline-flex; align-items: center; justify-content: center; }
+.band-counter-controls button, #bands-panel #bands-close { display: inline-flex; align-items: center; justify-content: center; }
+.bands-toggle-icon svg, .bands-chevron svg, .band-counter-controls button svg, #bands-close svg { flex-shrink: 0; }

@@ -6,6 +6,7 @@ import { Loader, priorityList } from './queue.js';
 import { PhotoCache } from './photos.js';
 import { toHash } from './state.js';
 import { buildSteps } from './timeline.js';
+import { frameBox, boxCovers, LOAD_FOV_DEG } from './viewbox.js';
 
 export const HIPS = 'https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube';
 const DEG = 180 / Math.PI;
@@ -45,7 +46,7 @@ export function createBackendSky(stel, {
   let disposed = false, generation = 0, request = null, animation = 0;
   let windows = [{wavelength:1.25,width:.05}], bandKey = '', lastRequest = null;
   let view = null, steps = [], currentUri = null, previous = null, lastMove = 0;
-  let visible = true, fill = true, upgrades = [], upgrading = 0;
+  let visible = true, fill = true, upgrades = [], upgrading = 0, loadingPaused = false;
   const frames = new Map(), metadata = new Map();
   const report = (message) => { if (!disposed) onStatus(message); };
   function writeHash(index) {
@@ -121,9 +122,11 @@ export function createBackendSky(stel, {
     onTimeline({steps:[],index:0});
     lastRequest = {...centre,fov};
     writeHash(0);
-    if (fov >= .5 || !visible) {report(visible ? 'Zoom in to load SPHEREx frames for this part of the sky.' : 'Showing the SPHEREx all-sky background.');return;}
+    if (fov >= LOAD_FOV_DEG || !visible) {report(visible ? 'Zoom in to load SPHEREx frames for this part of the sky.' : 'Showing the SPHEREx all-sky background.');return;}
     report('Finding SPHEREx exposures for the selected bands.');
-    const boxFov = Math.min(.5, Math.max(.05, fov * Math.max(1,aspect)));
+    // aspect is the canvas diagonal divided by its short side.
+    const boxFov = frameBox(fov, Math.sqrt(Math.max(0, aspect * aspect - 1)), 1);
+    if (boxFov == null) {report('Zoom in to load SPHEREx frames for this part of the sky.');return;}
     try {
       // Four metadata queries at a time; crop downloads use the original cap of eight.
       const answers = new Array(windows.length);
@@ -160,19 +163,37 @@ export function createBackendSky(stel, {
   function tick(now) {
     if(disposed) return;
     const centre=readSkyCentre(stel), fov=stel.core.fov*DEG;
+    const canvas=stel.canvas || globalThis.document?.getElementById('stel-canvas');
     const moved=!previous || Math.abs(centre.ra-previous.ra)>1e-6 || Math.abs(centre.dec-previous.dec)>1e-6 || Math.abs(fov-previous.fov)>1e-6;
     if(moved) {previous={...centre,fov};lastMove=now;onView(centre);}
+    // Leaving frame scale cancels the queue. Invalidate its coverage too, so a
+    // quick return to the same box cannot mistake a cancelled queue for a live one.
+    const paused = fov >= LOAD_FOV_DEG || !visible;
+    if (paused && !loadingPaused) {
+      generation++;request?.abort();loader?.setQueue([]);upgrades=[];
+      lastRequest=null;
+    }
+    if (!paused && loadingPaused) lastRequest=null;
+    loadingPaused=paused;
     if(!moved && now-lastMove>=300) {
       const dx=lastRequest ? Math.abs(((centre.ra-lastRequest.ra+540)%360)-180)*Math.cos(centre.dec/DEG) : Infinity;
       const dy=lastRequest ? Math.abs(centre.dec-lastRequest.dec) : Infinity;
       const box=view?.sequence;
-      if(!lastRequest || dx>(box?.fov ?? .05)*.25 || dy>(box?.fov ?? .05)*.25 || Math.abs(fov/lastRequest.fov-1)>.1) {
-        const canvas=stel.canvas || globalThis.document?.getElementById('stel-canvas');
+      const needsFrames = box && canvas && fov < LOAD_FOV_DEG
+        ? !boxCovers(box,centre,fov,canvas.clientWidth,canvas.clientHeight)
+        : dx>.0125 || dy>.0125 || (lastRequest && Math.abs(fov/lastRequest.fov-1)>.1);
+      if(!lastRequest || needsFrames) {
         const aspect=canvas ? Math.hypot(canvas.clientWidth,canvas.clientHeight)/Math.max(1,Math.min(canvas.clientWidth,canvas.clientHeight)) : 1;
         refresh(centre,fov,aspect);
       }
     }
-    if(fov>=.5) {layer.visible=false;loader?.setQueue([]);} else layer.visible=visible;
+    // A photo is a fixed sky box. Once its edge enters the viewport, leave
+    // the survey visible until a replacement covering the whole view arrives.
+    // Otherwise the old sharp frame is drawn as a rectangle over the survey.
+    const coversView = !view?.sequence || !canvas ||
+      boxCovers(view.sequence,centre,fov,canvas.clientWidth,canvas.clientHeight);
+    layer.visible=!paused && coversView;
+    if (!paused && !coversView && moved) report('Updating SPHEREx frames for this view.');
     animation=schedule(tick);
   }
   animation=schedule(tick);
