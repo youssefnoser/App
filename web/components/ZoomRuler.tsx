@@ -25,8 +25,8 @@ export default function ZoomRuler({ field, status, frames, onChange }: Props) {
   const loading = shown < LOAD_ARCMIN;
   const end = () => { drag.current = null; setLive(null); };
   const note = !loading ? `Zoom in past ${LOAD_ARCMIN}′ for frames`
-    : status.tone === 'busy' || status.tone === 'warn' ? status.title
-    : `${frames} frame${frames === 1 ? '' : 's'} in view`;
+    : status.tone === 'ok' ? `${frames} frame${frames === 1 ? '' : 's'} in view`
+    : status.title;
   return <div className={`field-ruler${live !== null ? ' is-sliding' : ''}${loading ? ' in-frames' : ''}`} data-tone={status.tone}>
     <div className="field-ruler-window" role="slider" tabIndex={0} aria-label="Field of view" aria-orientation="vertical"
       aria-valuemin={FIELD_MIN_ARCMIN} aria-valuemax={FIELD_MAX_ARCMIN} aria-valuenow={Number(field.toFixed(3))}

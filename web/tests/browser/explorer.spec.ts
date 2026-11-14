@@ -68,17 +68,14 @@ test('Stellarium canvas renders, target crosshair displays, and features functio
   await page.getByRole('button', { name: 'Next frame' }).click();
   await expect(page.locator('.time-section')).toContainText('December 2025');
 
-  // 7. Infrared / Visible toggle
-  const visibleBtn = page.getByRole('button', { name: 'Visible', exact: true });
-  const infraredBtn = page.getByRole('button', { name: 'Infrared', exact: true });
-  await visibleBtn.click();
-  await expect(visibleBtn).toHaveClass(/selected/);
-  await expect(canvas).toHaveCSS('filter', 'none');
-
-  await infraredBtn.click();
-  await expect(infraredBtn).toHaveClass(/selected/);
-  const filterStyle = await canvas.evaluate(el => getComputedStyle(el).filter);
-  expect(filterStyle).not.toBe('none');
+  // 7. Frames toggle in the map toolbar: hiding the frames leaves the all-sky map.
+  const framesBtn = page.getByRole('button', { name: 'Show SPHEREx frames' });
+  await expect(framesBtn).toHaveAttribute('aria-pressed', 'true');
+  await framesBtn.click();
+  await expect(framesBtn).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByText('SPHEREx frames hidden')).toBeVisible();
+  await framesBtn.click();
+  await expect(framesBtn).toHaveAttribute('aria-pressed', 'true');
 
   // 8. Straight zoom ruler: arrow keys step 1.25 times, Home is the deepest zoom.
   const ruler = page.getByRole('slider', { name: 'Field of view' });

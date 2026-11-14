@@ -20,7 +20,7 @@ export function describeProgress(progress: LoadProgress | null): ProgressText {
     case 'zoomed-out':
       return out('Zoom in to load frames', `SPHEREx frames load once the view is narrower than ${LOAD_ARCMIN}′. Until then you see the all-sky map.`, 'idle');
     case 'hidden':
-      return out('Visible-light map', 'Switch to Infrared to see SPHEREx frames.', 'idle');
+      return out('SPHEREx frames hidden', 'You see the SPHEREx all-sky map. Press Show SPHEREx frames in the right toolbar to blink the frames again.', 'idle');
     case 'loading':
       return out(`Loading ${done} of ${total}`, 'Frames join the timeline as they arrive.', 'busy');
     case 'cleaning':
