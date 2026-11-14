@@ -2,20 +2,17 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   targets as initialTargets,
-  zoomAt,
   MIN_ZOOM,
   MAX_ZOOM,
   getNextZoomIn,
   getNextZoomOut,
-  type Camera,
-  type Point,
 } from '@/lib/sky';
 import { cachedFetch } from '@/js/frontend-cache.js';
 import type { BackendTimeline } from '@/js/backend-sky.js';
 import BandSelector from './BandSelector';
 import { getBandWavelength } from '@/lib/spectral';
 import Rotor from './Rotor';
-import SkyCanvas from './SkyCanvas';
+import SkyCanvas, { type SkyGoto, type SkyView } from './SkyCanvas';
 import ImageMath from './ImageMath';
 import {
   GoogleMyLocationIcon,
@@ -104,7 +101,7 @@ export default function SkyExplorer() {
       setTargets(updated);
       if (!hasInitialPosition && !new URLSearchParams(location.search).has('ra')) {
         setCoordinates({ra:updated[0].ra,dec:updated[0].dec});
-        setViewCoordinates({ra:updated[0].ra,dec:updated[0].dec});
+        flyTo({ra:updated[0].ra,dec:updated[0].dec,fovDeg:5/60});
       }
     }).catch(() => {});
     return () => controller.abort();
@@ -139,9 +136,15 @@ export default function SkyExplorer() {
   const [selected, setSelected] = useState(0);
   const [coordinates, setCoordinates] = useState({ ra: 269.4521, dec: 4.6934 });
   const [viewCoordinates, setViewCoordinates] = useState({ ra: 269.4521, dec: 4.6934 });
-  const [recenterCount, setRecenterCount] = useState(0);
-  const [camera, setCamera] = useState<Camera>({ zoom: 1, pan: { x: 0, y: 0 } });
-  const [size, setSize] = useState<Point>({ x: 1, y: 1 });
+  // The engine owns the view (as on index.html). `zoom` mirrors its field of view
+  // (1 = 5 arcmin) for the labels; `goto` sends it an explicit move.
+  const [zoom, setZoom] = useState(1);
+  const [goto, setGoto] = useState<SkyGoto>({ id: 0, ra: 269.4521, dec: 4.6934, fovDeg: 5 / 60 });
+  const flyTo = useCallback((move: Omit<SkyGoto, 'id'>) => setGoto(current => ({ ...move, id: current.id + 1 })), []);
+  const onView = useCallback((view: SkyView) => {
+    setViewCoordinates({ ra: view.ra, dec: view.dec });
+    setZoom((5 / 60) / view.fovDeg);
+  }, []);
   const [frame, setFrame] = useState(0), [playing, setPlaying] = useState(false), [speed, setSpeed] = useState(1), [loop, setLoop] = useState(true);
   const [infrared, setInfrared] = useState(true), [grid, setGrid] = useState(true), [bands, setBands] = useState<number[]>([22]);
   const [sequenceWavelength, setSequenceWavelength] = useState<number | undefined>(1.25);
@@ -159,11 +162,12 @@ export default function SkyExplorer() {
     const fromHash = location.hash.includes('ra=');
     const params = new URLSearchParams(fromHash ? location.hash.slice(1) : location.search), a = params.get('ra'), d = params.get('dec');
     const fov = Number(params.get('fov')), epoch = Number(params.get(fromHash ? 'step' : 'frame'));
-    if (params.has('fov') && Number.isFinite(fov) && fov > 0) setCamera({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, 5 / (fromHash ? fov * 60 : fov))), pan: { x: 0, y: 0 } });
+    // The hash holds the fov in degrees, the query string in arcmin.
+    const fovDeg = params.has('fov') && Number.isFinite(fov) && fov > 0 ? (fromHash ? fov : fov / 60) : undefined;
     if (params.has(fromHash ? 'step' : 'frame') && Number.isInteger(epoch) && epoch >= 0) { savedStep.current = epoch; setFrame(epoch); }
     if (a !== null && d !== null && a.trim() && d.trim() && Number.isFinite(+a) && Number.isFinite(+d) && +a >= 0 && +a < 360 && +d >= -90 && +d <= 90) {
       setCoordinates({ ra: +a, dec: +d });
-      setViewCoordinates({ ra: +a, dec: +d });
+      flyTo({ ra: +a, dec: +d, fovDeg });
       setSelected(targets.findIndex(target => Math.abs(target.ra - +a) < .001 && Math.abs(target.dec - +d) < .001));
     }
   }, []);
@@ -177,9 +181,7 @@ export default function SkyExplorer() {
     return () => clearInterval(timer);
   }, [playing, loop, speed, frameCount]);
   useEffect(() => { if (playing && frame === lastFrame && !loop) setPlaying(false); }, [frame, loop, playing, lastFrame]);
-  const onZoom = useCallback((value: number, anchor?: Point) => setCamera(current => zoomAt(current, value, anchor ?? { x: size.x / 2, y: size.y / 2 })), [size]);
-  const onPan = useCallback((pan: Point) => setCamera(current => ({ ...current, pan })), []);
-  const onResize = useCallback((next: Point) => setSize(next), []);
+  const onZoom = useCallback((value: number) => flyTo({ fovDeg: (5 / 60) / Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value)) }), [flyTo]);
   const onBands = useCallback((next: number[]) => { setBands(next); setSequenceWavelength(undefined); }, []);
   const onWavelength = useCallback((value: number) => {
     const nearest = Array.from({length:102}, (_, i) => i + 1).reduce((a, b) =>
@@ -229,14 +231,13 @@ export default function SkyExplorer() {
 
   function updateCoordinates(a: number, d: number) {
     setCoordinates({ ra: a, dec: d });
-    setViewCoordinates({ ra: a, dec: d });
     const url = new URL(location.href);
     url.searchParams.set('ra', String(a));
     url.searchParams.set('dec', String(d));
     url.hash = '';
     savedStep.current = null;
     window.history.replaceState(null, '', url);
-    setCamera({ zoom: 1, pan: { x: 0, y: 0 } });
+    flyTo({ ra: a, dec: d, fovDeg: 5 / 60 });
     setFrame(0);
     setPlaying(false);
   }
@@ -411,28 +412,21 @@ export default function SkyExplorer() {
     </div>
     <section className="sky" aria-label="Interactive sky map">
       <SkyCanvas
-        camera={camera}
+        goto={goto}
+        target={coordinates}
         frame={frame}
-        selected={selected}
-        bandCount={bands.length}
         bands={bands}
         sequenceWavelength={sequenceWavelength}
         sequenceWidth={sequenceWidth}
-        observationMjd={sequence.steps[frame]?.mjd}
         onTimeline={onTimeline}
         onStatus={setMessage}
+        onView={onView}
         infrared={infrared}
         grid={grid}
         name={target?.name ?? `${coordinates.ra.toFixed(4)}°, ${coordinates.dec >= 0 ? '+' : ''}${coordinates.dec.toFixed(4)}°`}
         objectType={target?.type ?? 'CUSTOM COORDINATES'}
-        coordinates={coordinates}
         gaiaEnabled={gaiaEnabled}
         wiseEnabled={wiseEnabled}
-        recenterTrigger={recenterCount}
-        onCoordinatesChange={setViewCoordinates}
-        onZoom={onZoom}
-        onPan={onPan}
-        onResize={onResize}
       />
       <div className="map-top">
         <div className="map-top-left">
@@ -460,11 +454,7 @@ export default function SkyExplorer() {
         <button
           aria-label="Recenter map"
           title="Recenter on target"
-          onClick={() => {
-            setCamera({ zoom: 1, pan: { x: 0, y: 0 } });
-            setViewCoordinates(coordinates);
-            setRecenterCount(c => c + 1);
-          }}
+          onClick={() => flyTo({ ra: coordinates.ra, dec: coordinates.dec, fovDeg: 5 / 60, retry: true })}
         >
           <GoogleMyLocationIcon />
         </button>
@@ -491,7 +481,7 @@ export default function SkyExplorer() {
         </button>
       </div>
       <BandSelector selected={bands} onSelection={onBands} onOpenChange={setBandsOpen} wavelength={sequenceWavelength ?? getBandWavelength(bands[0] ?? 22)} width={sequenceWidth} onWavelength={onWavelength} onWidth={setSequenceWidth} />
-      <div className="map-bottom"><span>{(5 / camera.zoom).toFixed(1)} arcmin</span><span>{message || 'SPHEREx observations'}</span></div>
+      <div className="map-bottom"><span>{(5 / zoom).toFixed(1)} arcmin</span><span>{message || 'SPHEREx observations'}</span></div>
       <section className="timeline rotary-console" aria-label="Sky controls">
         <div className="zoom-section map-zoom-controls" aria-label="Zoom controls">
           <button
@@ -499,8 +489,8 @@ export default function SkyExplorer() {
             id="zoom-in"
             aria-label="Zoom in"
             title="Zoom in"
-            disabled={camera.zoom >= MAX_ZOOM}
-            onClick={() => onZoom(getNextZoomIn(camera.zoom))}
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => onZoom(getNextZoomIn(zoom))}
           >
             <GoogleZoomInIcon />
           </button>
@@ -510,8 +500,8 @@ export default function SkyExplorer() {
             id="zoom-out"
             aria-label="Zoom out"
             title="Zoom out"
-            disabled={camera.zoom <= MIN_ZOOM}
-            onClick={() => onZoom(getNextZoomOut(camera.zoom))}
+            disabled={zoom <= MIN_ZOOM}
+            onClick={() => onZoom(getNextZoomOut(zoom))}
           >
             <GoogleZoomOutIcon />
           </button>

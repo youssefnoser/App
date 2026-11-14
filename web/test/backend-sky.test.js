@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendCache } from '../js/frontend-cache.js';
-import { createBackendSky, frameAddress, readSkyCentre, pointSky } from '../js/backend-sky.js';
+import { createBackendSky, frameAddress } from '../js/backend-sky.js';
+
+// The adapter keeps the page hash in step with the view; Node has neither.
+globalThis.location = {hash:''};
+globalThis.history = {replaceState:(_s,_t,url)=>{globalThis.location.hash=url;}};
+
+// What js/sky.js makeSky() hands over, built on a fake engine whose frame
+// conversions are the identity: the view centre is yaw/pitch in degrees.
+const skyOf = (stel) => ({
+ stel, core: stel.core, layer: stel.createLayer({id:'spherex-frames'}),
+ viewCentre: () => ({ra: stel.core.observer.yaw*180/Math.PI, dec: stel.core.observer.pitch*180/Math.PI}),
+ fovDeg: () => stel.core.fov*180/Math.PI,
+});
 
 test('sequence frame URLs preserve coordinates and the median wavelength window', () => {
  const sequence = {ra:269.4,dec:4.7,fov:.15,wavelength:1.25,width:.05};
@@ -15,14 +27,16 @@ test('sequence frame URLs preserve coordinates and the median wavelength window'
  assert.equal(median.searchParams.get('fov'),'0.15');
 });
 
-test('catalogue pointing and readout use ASTROM/CIRS conversion', () => {
- const calls=[];
- const stel={observer:{},core:{observer:{yaw:1,pitch:.2}},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,
- convertFrame:(_,from,to,v)=>{calls.push([from,to]);return v;},lookAt:v=>calls.push(v)};
- pointSky(stel,{ra:90,dec:30});
- assert.deepEqual(calls[0],['ASTROM','CIRS']);
- assert.equal(readSkyCentre(stel).ra,180/Math.PI);
- assert.deepEqual(calls[2],['CIRS','ASTROM']);
+test('frames go on the shared sky layer; the adapter makes no layer of its own', () => {
+ let made=0;
+ const layer={visible:true,add:()=>({}),remove:()=>{}};
+ const stel={core:{fov:1,observer:{yaw:0,pitch:0},dss:{}},createLayer:()=>{made++;return layer;}};
+ const sky=skyOf(stel);
+ const controller=createBackendSky(sky,{schedule:()=>0,cancel:()=>{}});
+ assert.equal(made,1);
+ controller.setVisible(false);
+ assert.equal(sky.layer.visible,false);
+ controller.destroy();
 });
 
 test('real frames arrive progressively, expose metadata, and cancel on disposal', async () => {
@@ -39,7 +53,7 @@ test('real frames arrive progressively, expose metadata, and cancel on disposal'
    if(String(url).includes('uri=two')) await new Promise(resolve=>{finishSecond=resolve;options.signal.addEventListener('abort',resolve,{once:true});});
    return new Response(new Uint8Array([1]),{headers:{'X-Frame-Meta':'{"wavelength_um":1.25,"detector":2}'}});
  };
- const controller=createBackendSky(stel,{fetchFn,onTimeline:t=>timelines.push(t),onStatus:s=>statuses.push(s),schedule:()=>0,cancel:()=>{}});
+ const controller=createBackendSky(skyOf(stel),{fetchFn,onTimeline:t=>timelines.push(t),onStatus:s=>statuses.push(s),schedule:()=>0,cancel:()=>{}});
  controller.setBands([{wavelength:1.25,width:.05}],20);
  await controller.refresh({ra:180/Math.PI,dec:0},.15,1);
  await new Promise(resolve=>setTimeout(resolve,10));
@@ -62,7 +76,7 @@ test('zoomed-out views fetch no crops and backend failures expose a retry messag
  const statuses=[];let calls=0;
  const layer={visible:true,add:()=>({}),remove:()=>{}};
  const stel={core:{fov:Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
- const controller=createBackendSky(stel,{fetchFn:async()=>{calls++;return new Response('',{status:502});},onStatus:s=>statuses.push(s),schedule:()=>0,cancel:()=>{}});
+ const controller=createBackendSky(skyOf(stel),{fetchFn:async()=>{calls++;return new Response('',{status:502});},onStatus:s=>statuses.push(s),schedule:()=>0,cancel:()=>{}});
  await controller.refresh({ra:30,dec:20},1);
  assert.equal(calls,0);
  assert(statuses.at(-1).includes('Zoom in'));
@@ -82,7 +96,7 @@ test('multiple selected detectors share a bounded metadata queue and deduplicate
    await new Promise(resolve=>setTimeout(resolve,5));running--;
    return Response.json({cell:-1,sequence:{ra:30,dec:20,fov:.2,detector:1},cells:[{pix:-1,ra:30,dec:20,ring:0}],exposures:[{uri:'shared',mjd:1,date:'2025-01-01',detector:1,first:true,cells:[-1]}]});
  };
- const controller=createBackendSky(stel,{fetchFn,onTimeline:t=>timelines.push(t),onStatus:s=>statuses.push(s),schedule:()=>0,cancel:()=>{}});
+ const controller=createBackendSky(skyOf(stel),{fetchFn,onTimeline:t=>timelines.push(t),onStatus:s=>statuses.push(s),schedule:()=>0,cancel:()=>{}});
  controller.setFill(false);
  controller.setBands([1,2,3,4,5,6].map(detector=>({detector})),0);
  await controller.refresh({ra:30,dec:20},.15);
@@ -97,7 +111,7 @@ test('multiple selected detectors share a bounded metadata queue and deduplicate
 test('background-only mode keeps the index.html survey and never falls back to the old sky map', () => {
  const layer={visible:true,add:()=>({}),remove:()=>{}};
  const stel={core:{dss:{visible:true}},createLayer:()=>layer};
- const controller=createBackendSky(stel,{schedule:()=>0,cancel:()=>{}});
+ const controller=createBackendSky(skyOf(stel),{schedule:()=>0,cancel:()=>{}});
  controller.setVisible(false);
  assert.equal(layer.visible,false);
  assert.equal(stel.core.dss.visible,true);
@@ -118,7 +132,7 @@ test('revisiting a cached selection makes no new network requests and excludes o
     {uri:'wrong-detector',mjd:2,date:'2025-01-02',detector:3,first:true,cells:[-1]}]});
    return new Response(new Uint8Array([1]),{headers:{'X-Frame-Meta':'{"detector":2}'}});
  }});
- const controller=createBackendSky(stel,{fetchFn:cache.fetch,onTimeline:t=>timelines.push(t),schedule:()=>0,cancel:()=>{}});
+ const controller=createBackendSky(skyOf(stel),{fetchFn:cache.fetch,onTimeline:t=>timelines.push(t),schedule:()=>0,cancel:()=>{}});
  controller.setFill(false);
  controller.setBands([{detector:2,wavelength:1.2,width:.01}],20);
  await controller.refresh({ra:30,dec:20},.15);
@@ -139,7 +153,7 @@ test('wide canvas requests the full diagonal box beyond the old half-degree cap'
  const addresses=[];
  const layer={visible:true,add:()=>({}),remove:()=>{}};
  const stel={core:{fov:.3*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
- const controller=createBackendSky(stel,{fetchFn:async url=>{
+ const controller=createBackendSky(skyOf(stel),{fetchFn:async url=>{
    addresses.push(url);
    return Response.json({cell:-1,sequence:{ra:30,dec:20,fov:.671},exposures:[]});
  },schedule:()=>0,cancel:()=>{}});
@@ -158,7 +172,7 @@ test('zooming briefly past the frame threshold resumes every pending batch on re
  const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
  const stel={canvas:{clientWidth:800,clientHeight:800},core:{fov:.15*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
  const exposures=Array.from({length:12},(_,i)=>({uri:`frame-${i}`,mjd:i,date:'2025-01-01',detector:2,first:true,cells:[-1]}));
- const controller=createBackendSky(stel,{schedule:fn=>{tick=fn;return 0;},cancel:()=>{},onTimeline:t=>timelines.push(t),fetchFn:async(url,{signal})=>{
+ const controller=createBackendSky(skyOf(stel),{schedule:fn=>{tick=fn;return 0;},cancel:()=>{},onTimeline:t=>timelines.push(t),fetchFn:async(url,{signal})=>{
    if(url.includes('/sequence')) return Response.json({cell:-1,sequence:{ra:180/Math.PI,dec:0,fov:.3},cells:[{pix:-1,ring:0}],exposures});
    started.push(url);
    await new Promise(resolve=>{pending.push(resolve);signal.addEventListener('abort',resolve,{once:true});});
@@ -180,19 +194,51 @@ test('zooming briefly past the frame threshold resumes every pending batch on re
 });
 
 
-test('a frame box that no longer covers the canvas is hidden during pan and zoom', async () => {
+test('panning out of the box keeps its frames on screen; only zooming out hides them', async () => {
  let tick;
  const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
  const stel={canvas:{clientWidth:1600,clientHeight:800},core:{fov:.1*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
- const controller=createBackendSky(stel,{schedule:fn=>{tick=fn;return 0;},cancel:()=>{},fetchFn:async()=>Response.json({cell:-1,sequence:{ra:180/Math.PI,dec:0,fov:.224},cells:[{pix:-1,ring:0}],exposures:[]})});
+ const controller=createBackendSky(skyOf(stel),{schedule:fn=>{tick=fn;return 0;},cancel:()=>{},fetchFn:async()=>Response.json({cell:-1,sequence:{ra:180/Math.PI,dec:0,fov:.224},cells:[{pix:-1,ring:0}],exposures:[]})});
  await controller.refresh({ra:180/Math.PI,dec:0},.1,Math.sqrt(5));
  tick(0);assert.equal(layer.visible,true);
- // Drag outside the box, before the 300 ms settle timer can request a new one.
+ // Drag past the box edge: the loaded frames stay until the next box adds to them.
  stel.core.observer.pitch=.1*Math.PI/180;
- tick(10);assert.equal(layer.visible,false,'must not expose the old frame edge over the survey');
- stel.core.observer.pitch=0;
- tick(20);assert.equal(layer.visible,true);
- stel.core.fov=.2*Math.PI/180;
- tick(30);assert.equal(layer.visible,false,'zooming out must not expose the old frame border');
+ tick(10);assert.equal(layer.visible,true,'a pan must not swap loaded frames for the blurred survey');
+ stel.core.fov=1*Math.PI/180;
+ tick(20);assert.equal(layer.visible,false,'zoomed out past frame scale shows only the survey');
+ controller.destroy();
+});
+
+
+test('a new box after a pan adds its frames next to the old ones instead of replacing them', async () => {
+ const photos=[],removed=[],timelines=[];
+ let releaseB;
+ const layer={visible:true,add:(_type,args)=>{const p={...args};photos.push(p);return p;},remove:p=>removed.push(p)};
+ const stel={core:{fov:.15*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const exposures=cell=>[{uri:'one',mjd:1,date:'2025-01-01',detector:2,first:true,cells:[cell]},{uri:'two',mjd:2,date:'2025-02-01',detector:2,first:true,cells:[cell]}];
+ const fetchFn=async(url,{signal}={})=>{
+   const u=new URL(url,'http://localhost');
+   const cell=Number(u.searchParams.get('ra'))<30.01 ? -1 : -2;
+   if(u.pathname.endsWith('/sequence')) return Response.json({cell,sequence:{ra:Number(u.searchParams.get('ra')),dec:20,fov:.2},cells:[{pix:cell,ring:0}],exposures:exposures(cell)});
+   if(cell===-2) await new Promise(resolve=>{releaseB=resolve;signal?.addEventListener('abort',resolve,{once:true});});
+   return new Response(new Uint8Array([1]));
+ };
+ const controller=createBackendSky(skyOf(stel),{fetchFn,onTimeline:t=>timelines.push(t),schedule:()=>0,cancel:()=>{}});
+ controller.setFill(false);
+ await controller.refresh({ra:30,dec:20},.15);
+ await new Promise(resolve=>setTimeout(resolve,10));
+ controller.showFrame(1);
+ const boxA=photos.filter(p=>p.visible);
+ assert.equal(boxA.length,1);
+ // Pan: box B is requested, its crops are still downloading.
+ await controller.refresh({ra:30.05,dec:20},.15);
+ await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(removed.length,0,'old frames must not be dropped');
+ assert(boxA[0].visible,'the shown exposure stays on screen');
+ assert.deepEqual(timelines.at(-1).steps.map(s=>s.uri),['one','two'],'steps that still have frames stay in the timeline');
+ assert.equal(timelines.at(-1).steps[timelines.at(-1).index].uri,'two','the blink stays on the same exposure');
+ // Box B arrives and is drawn alongside box A for the same exposure.
+ for(let i=0;i<4 && releaseB;i++) {releaseB();releaseB=null;await new Promise(resolve=>setTimeout(resolve,10));}
+ assert(photos.filter(p=>p.visible).length>=2,'box A and box B show together');
  controller.destroy();
 });

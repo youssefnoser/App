@@ -1,5 +1,3 @@
-export type Point = { x: number; y: number };
-export type Camera = { zoom: number; pan: Point };
 export const MIN_ZOOM = (5 / 60) / 105;
 export const MAX_ZOOM = 25.0;
 export const ZOOM_LEVELS = [MIN_ZOOM, 0.0015, 0.003, 0.006, 0.012, 0.025, 0.05, 0.1, 0.25, 0.4, 0.6, 1.0, 1.4, 2.0, 2.8, 4.0, 6.0, 9.0, 14.0, 20.0, 25.0];
@@ -15,10 +13,6 @@ export function getNextZoomOut(current: number): number {
   return prev ?? MIN_ZOOM;
 }
 
-export function zoomAt(camera: Camera, value: number, anchor: Point): Camera {
-  const zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value)), ratio = zoom / camera.zoom;
-  return { zoom, pan: { x: anchor.x - (anchor.x - camera.pan.x) * ratio, y: anchor.y - (anchor.y - camera.pan.y) * ratio } };
-}
 export const targets = [
   { name: 'Barnard’s Star', ra: 269.4521, dec: 4.6934, type: 'HIGH PROPER-MOTION STAR', description: 'A star on the move' },
   { name: 'Epsilon Indi B', ra: 330.8417, dec: -56.785, type: 'BROWN DWARF PAIR', description: 'A hidden pair of brown dwarfs' },

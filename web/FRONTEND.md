@@ -1,8 +1,8 @@
 # SPHEREx frontend
 
-Aladin Lite has been removed. The app uses Next.js, React, TypeScript, native WebGL with a Canvas 2D fallback, and CSS. No external survey tiles are loaded.
+The app uses Next.js, React, TypeScript and CSS. The sky is the Stellarium Web Engine with the SPHEREx all-sky map as background and real SPHEREx frames on top, set up by `js/sky.js` exactly as on `index.html` (see `docs/ARCHITECTURE.md`).
 
-Search accepts preset object names or decimal RA/Dec pairs. The sky is simulated. Timeline playback, speed and zoom rotors, six detectors with 17 bands each, and stacking from 1 to 102 are available directly. The sidebar and compass are removed.
+Search accepts preset object names or decimal RA/Dec pairs. Timeline playback, speed and zoom rotors, six detectors with 17 bands each, and stacking from 1 to 102 are available directly. The sidebar and compass are removed.
 
 Run `npm run dev` for local development, `npm run build` for production, `npm run check` for TypeScript, and `npm test` for zoom, detector mapping, and SVG hydration regressions. Playwright browser checks use Microsoft Edge.
 
