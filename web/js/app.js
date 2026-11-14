@@ -42,6 +42,7 @@ const el = {
   play: $('play'),
   next: $('next'),
   stepInfo: $('step-info'),
+  detector: $('detector'),
   wl: $('wl'),
   wlOut: $('wl-out'),
   status: $('status'),
@@ -201,7 +202,11 @@ function applyView(view) {
     if (e.stack != null && !stackOf.has(e.uri)) stackOf.set(e.uri, e.stack);
   }
 
-  const newSteps = buildSteps(view.exposures);
+  // Blinking across detectors changes the wavelength, and with it every star's
+  // brightness, so by default the steps are the visits of one detector only.
+  const detector = Number(el.detector.value);
+  const newSteps = buildSteps(
+    detector ? view.exposures.filter((e) => e.detector === detector) : view.exposures);
   const index = app.steps.length ? keepStep(app.steps, newSteps, app.stepIndex) : 0;
   if (!app.steps.length && app.wantedStep != null && newSteps.length) {
     app.wantedUri = newSteps[Math.min(app.wantedStep, newSteps.length - 1)].uri;
@@ -455,6 +460,7 @@ function wireControls() {
     render();
   });
 
+  el.detector.addEventListener('change', () => { if (app.view) applyView(app.view); });
   window.addEventListener('hashchange', applyHash);
   wireTargets();
 }
