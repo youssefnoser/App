@@ -34,3 +34,22 @@ export function boxCovers(box, c, fovDeg, width, height) {
   const dy = Math.abs(c.dec - box.dec);
   return dx + halfW <= box.fov / 2 && dy + halfH <= box.fov / 2;
 }
+
+// Flat-sky offset of b's centre from a's, in degrees on the sky; RA wraps at 0/360.
+function offset(a, b) {
+  const dRa = ((b.ra - a.ra + 540) % 360) - 180;
+  return { dx: Math.abs(dRa) * Math.cos((a.dec * Math.PI) / 180), dy: Math.abs(b.dec - a.dec) };
+}
+
+/** True while any part of the square box {ra, dec, fov} overlaps the canvas. */
+export function boxOnScreen(box, c, fovDeg, width, height) {
+  const short = Math.max(1, Math.min(width, height));
+  const { dx, dy } = offset(c, box);
+  return dx < (fovDeg * width) / short / 2 + box.fov / 2 && dy < (fovDeg * height) / short / 2 + box.fov / 2;
+}
+
+/** True when the square box `inner` lies wholly inside the square box `outer`. */
+export function boxInside(inner, outer) {
+  const { dx, dy } = offset(outer, inner);
+  return dx + inner.fov / 2 <= outer.fov / 2 && dy + inner.fov / 2 <= outer.fov / 2;
+}

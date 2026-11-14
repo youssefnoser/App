@@ -8,9 +8,10 @@ globalThis.location = {hash:''};
 globalThis.history = {replaceState:(_s,_t,url)=>{globalThis.location.hash=url;}};
 
 // What js/sky.js makeSky() hands over, built on a fake engine whose frame
-// conversions are the identity: the view centre is yaw/pitch in degrees.
+// conversions are the identity: the view centre is yaw/pitch in degrees. The real
+// engine always has its canvas; fakes without one get a square 800 px canvas.
 const skyOf = (stel) => ({
- stel, core: stel.core, layer: stel.createLayer({id:'spherex-frames'}),
+ stel: Object.assign(stel, {canvas: stel.canvas ?? {clientWidth:800,clientHeight:800}}), core: stel.core, layer: stel.createLayer({id:'spherex-frames'}),
  viewCentre: () => ({ra: stel.core.observer.yaw*180/Math.PI, dec: stel.core.observer.pitch*180/Math.PI}),
  fovDeg: () => stel.core.fov*180/Math.PI,
 });
@@ -89,7 +90,7 @@ test('zoomed-out views fetch no crops and backend failures expose a retry messag
 test('multiple selected detectors share a bounded metadata queue and deduplicate exposure URIs', async () => {
  const statuses=[];const timelines=[];let running=0,max=0;
  const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
- const stel={core:{fov:.15*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const stel={core:{fov:.15*Math.PI/180,observer:{yaw:30*Math.PI/180,pitch:20*Math.PI/180},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
  const fetchFn=async(url)=>{
    if(!url.includes('/sequence')) return new Response(new Uint8Array([1]));
    running++;max=Math.max(max,running);
@@ -124,7 +125,7 @@ test('background-only mode keeps the index.html survey and never falls back to t
 test('revisiting a cached selection makes no new network requests and excludes other detectors', async () => {
  const calls=[],photos=[],timelines=[];
  const layer={visible:true,add:(_type,args)=>{const photo={...args};photos.push(photo);return photo;},remove:()=>{}};
- const stel={core:{fov:.15*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const stel={core:{fov:.15*Math.PI/180,observer:{yaw:30*Math.PI/180,pitch:20*Math.PI/180},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
  const cache=createFrontendCache({storage:null,fetchFn:async(url)=>{
    calls.push(url);
    if(url.includes('/sequence')) return Response.json({cell:-1,sequence:{ra:30,dec:20,fov:.2,wavelength:1.2,width:.01},cells:[{pix:-1,ra:30,dec:20,ring:0}],exposures:[
@@ -214,7 +215,7 @@ test('a new box after a pan adds its frames next to the old ones instead of repl
  const photos=[],removed=[],timelines=[];
  let releaseB;
  const layer={visible:true,add:(_type,args)=>{const p={...args};photos.push(p);return p;},remove:p=>removed.push(p)};
- const stel={core:{fov:.15*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const stel={core:{fov:.15*Math.PI/180,observer:{yaw:30*Math.PI/180,pitch:20*Math.PI/180},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
  const exposures=cell=>[{uri:'one',mjd:1,date:'2025-01-01',detector:2,first:true,cells:[cell]},{uri:'two',mjd:2,date:'2025-02-01',detector:2,first:true,cells:[cell]}];
  const fetchFn=async(url,{signal}={})=>{
    const u=new URL(url,'http://localhost');
@@ -265,5 +266,88 @@ test('zooming out past the loaded box asks for the bigger box once, not on every
  assert.equal(sequenceCalls.length,2,'one request for the bigger box, not one per frame');
  assert(sequenceCalls[1]>sequenceCalls[0]);
  pending.forEach(resolve=>resolve());
+ controller.destroy();
+});
+
+
+// A fake backend with several sequence boxes. `pickBox(ra, fov)` names the box a
+// request is for: its cell, its exposures, and which crops answer at once; the
+// rest wait for `release()` or an abort.
+function boxBackend(pickBox) {
+ const waiting=[];const calls={sequence:[],frames:0};
+ const fetchFn=async(url,{signal}={})=>{
+   const u=new URL(url,'http://localhost'),p=u.searchParams;
+   const box=pickBox(Number(p.get('ra')),Number(p.get('fov')));
+   if(u.pathname.endsWith('/sequence')) {
+     calls.sequence.push({ra:p.get('ra'),dec:p.get('dec'),fov:p.get('fov')});
+     return Response.json({cell:box.cell,sequence:{ra:Number(p.get('ra')),dec:Number(p.get('dec')),fov:Number(p.get('fov'))},cells:[{pix:box.cell,ring:0}],
+       exposures:box.uris.map((uri,i)=>({uri,mjd:i,date:`2025-0${i+1}-01`,detector:2,first:true,cells:[box.cell]}))});
+   }
+   calls.frames++;
+   if(!box.now.includes(p.get('uri'))) await new Promise(resolve=>{waiting.push({uri:p.get('uri'),cell:box.cell,resolve});signal?.addEventListener('abort',resolve,{once:true});});
+   return new Response(new Uint8Array([1]));
+ };
+ const release=(cell,uris)=>{for(const w of waiting) if(w.cell===cell && uris.includes(w.uri)) w.resolve();};
+ return {fetchFn,calls,release};
+}
+const settle=()=>new Promise(resolve=>setTimeout(resolve,10));
+const skyAt=(ra,dec,fovDeg)=>{
+ const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
+ return {canvas:{clientWidth:800,clientHeight:800},core:{fov:fovDeg*Math.PI/180,observer:{yaw:ra*Math.PI/180,pitch:dec*Math.PI/180},dss:{}},
+   observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+};
+
+test('the timeline holds only exposures every loaded patch on screen can show', async () => {
+ const uris=['one','two','three'];
+ const A={cell:-1,uris,now:uris}, B={cell:-2,uris,now:[]};
+ const backend=boxBackend(ra=>ra<30.01 ? A : B);
+ const timelines=[];
+ const controller=createBackendSky(skyOf(skyAt(30,20,.15)),{fetchFn:backend.fetchFn,onTimeline:t=>timelines.push(t),schedule:()=>0,cancel:()=>{}});
+ controller.setFill(false);
+ await controller.refresh({ra:30,dec:20},.15);await settle();
+ assert.deepEqual(timelines.at(-1).steps.map(s=>s.uri),uris);
+ // Pan: patch B overlaps A but is not inside it. With nothing loaded yet, B does not cut the blink.
+ await controller.refresh({ra:30.05,dec:20},.15);await settle();
+ assert.deepEqual(timelines.at(-1).steps.map(s=>s.uri),uris);
+ // B loads two of the three: blinking 'two' would flash B's part of the sky on and off.
+ backend.release(-2,['one','three']);await settle();
+ assert.deepEqual(timelines.at(-1).steps.map(s=>s.uri),['one','three']);
+ backend.release(-2,['two']);await settle();
+ assert.deepEqual(timelines.at(-1).steps.map(s=>s.uri),uris);
+ controller.destroy();
+});
+
+test('a patch wholly inside a bigger one does not cut the timeline for what the bigger one shows', async () => {
+ const uris=['one','two','three'];
+ const inner={cell:-1,uris,now:['one']}, outer={cell:-2,uris,now:uris};
+ const backend=boxBackend((_ra,fov)=>fov<.3 ? inner : outer);
+ const timelines=[];
+ const controller=createBackendSky(skyOf(skyAt(30,20,.15)),{fetchFn:backend.fetchFn,onTimeline:t=>timelines.push(t),schedule:()=>0,cancel:()=>{}});
+ controller.setFill(false);
+ await controller.refresh({ra:30,dec:20},.15);await settle();
+ assert.deepEqual(timelines.at(-1).steps.map(s=>s.uri),['one']);
+ await controller.refresh({ra:30,dec:20},.3);await settle(); // zoom out: the bigger box holds the inner one
+ assert.deepEqual(timelines.at(-1).steps.map(s=>s.uri),uris);
+ controller.destroy();
+});
+
+test('zooming out past frame scale and back reuses the loaded box instead of downloading it again', async () => {
+ let tick;
+ const box={cell:-1,uris:['one','two'],now:['one','two']};
+ const backend=boxBackend(()=>box);
+ const stel=skyAt(30,20,.15);
+ const timelines=[];
+ const controller=createBackendSky(skyOf(stel),{fetchFn:backend.fetchFn,onTimeline:t=>timelines.push(t),schedule:fn=>{tick=fn;return 0;},cancel:()=>{}});
+ controller.setFill(false);
+ tick(0);tick(400);await settle();
+ const first=backend.calls.sequence[0], frames=backend.calls.frames;
+ assert.equal(timelines.at(-1).steps.length,2);
+ stel.core.fov=1*Math.PI/180;tick(500);tick(900); // past 0.5 deg: survey only
+ // Back in, a little off the old zoom and centre: the loaded box still covers the canvas.
+ stel.core.fov=.14*Math.PI/180;stel.core.observer.yaw=30.01*Math.PI/180;
+ tick(1000);tick(1400);await settle();
+ assert.deepEqual(backend.calls.sequence.at(-1),first,'asks for the same box, which the caches already hold');
+ assert.equal(backend.calls.frames,frames,'no crop is downloaded again');
+ assert.equal(timelines.at(-1).steps.length,2);
  controller.destroy();
 });
