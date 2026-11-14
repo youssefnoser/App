@@ -3,6 +3,8 @@
 Routes:
   GET /api/view?ra=&dec=&fov=            which patches and exposures cover a view
   GET /api/patch/{pix}/frame.png?uri=    one patch's crop of one exposure, as a PNG
+  GET /api/gaia?ra=&dec=&fov=            bright and fast-moving Gaia DR3 stars around a view
+  GET /api/gaia/source/{id}              one Gaia DR3 source by id
 Static files: /engine and /skydata (Stellarium Web Engine), /shared (web/shared/, modules
 the test bench shares with the Next.js app) and / (testbench/), each mounted only if its
 directory exists, so the app imports without a vendor build.
@@ -25,9 +27,11 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 from fastapi import FastAPI, HTTPException, Query
+from fastapi import Path as FastApiPath
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
+from server import gaia
 from server.catalog import catalog
 from server.cutouts import CutoutError, cache_dir, check_uri, fetch_cutout
 from server.irsa import Exposure, IrsaError, find_exposures
@@ -87,6 +91,59 @@ def targets() -> list[dict]:
         ra, dec = propagate(target, now)
         out.append({"key": key, "name": target.name, "ra": round(ra, 5), "dec": round(dec, 5)})
     return out
+
+
+GAIA_RADII = (0.1, 0.25, 0.5, 0.75)
+GAIA_DOWN = "The Gaia service did not answer. Try again in a minute."
+
+
+def snap_cone(ra: float, dec: float, fov: float) -> tuple[float, float, float]:
+    """Cache key for a Gaia cone: centre on a 0.05 deg grid (RA kept in 0..360),
+    radius the smallest bucket that covers min(0.75, max(0.05, 0.75 * fov))."""
+    snapped_ra = round(round(ra / 0.05) * 0.05, 2) % 360.0
+    snapped_dec = max(-90.0, min(90.0, round(round(dec / 0.05) * 0.05, 2)))
+    want = min(0.75, max(0.05, 0.75 * fov))
+    radius = next(r for r in GAIA_RADII if r >= want - 1e-9)
+    return snapped_ra, snapped_dec, radius
+
+
+@app.get("/api/gaia")
+def gaia_cone(
+    ra: float = Query(..., ge=0, lt=360),
+    dec: float = Query(..., ge=-90, le=90),
+    fov: float = Query(..., ge=0.01, le=2),
+) -> dict:
+    """Brightest Gaia DR3 stars plus fast movers around a view, at epoch J2016.0.
+
+    Cached on disk per snapped cone forever (DR3 never changes); empty answers
+    are not kept, since they may be a gap in the service."""
+    sra, sdec, radius = snap_cone(ra, dec, fov)
+    path = cache_dir() / "gaia" / f"cone-{sra:.2f}-{sdec:+.2f}-{radius}.json"
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        pass
+    try:
+        sources = gaia.cone(sra, sdec, radius)
+    except gaia.GaiaError:
+        raise HTTPException(status_code=502, detail=GAIA_DOWN)
+    body = {"epoch": 2016.0, "ra": sra, "dec": sdec, "radius": radius,
+            "sources": [s.to_dict() for s in sources]}
+    if sources:
+        _write_atomic(path, json.dumps(body).encode())
+    return body
+
+
+@app.get("/api/gaia/source/{source_id}")
+def gaia_source(source_id: str = FastApiPath(..., pattern=r"^\d{1,19}$")) -> dict:
+    """One Gaia DR3 source by id, at epoch J2016.0."""
+    try:
+        found = gaia.source(source_id)
+    except gaia.GaiaError:
+        raise HTTPException(status_code=502, detail=GAIA_DOWN)
+    if found is None:
+        raise HTTPException(status_code=404, detail="No Gaia DR3 source has that ID.")
+    return found.to_dict()
 
 
 def _write_atomic(path: Path, data: bytes) -> None:

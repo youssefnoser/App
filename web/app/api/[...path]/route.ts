@@ -1,6 +1,6 @@
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-const allowed = /^(targets|view|sequence|frame\.png|patch\/\d+\/frame\.png)$/;
+const allowed = /^(targets|view|sequence|gaia|gaia\/source\/\d{1,19}|frame\.png|patch\/\d+\/frame\.png)$/;
 export async function GET(request: Request, context: {params:Promise<{path:string[]}>}) {
   const {path} = await context.params;
   const route=path.join('/');
