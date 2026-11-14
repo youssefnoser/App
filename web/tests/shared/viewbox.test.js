@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { frameBox, LOAD_FOV_DEG, SEQ_MAX_FOV_DEG } from '../../shared/viewbox.js';
+import { frameBox, LOAD_FOV_DEG, SEQ_MAX_FOV_DEG, MAX_FOV_DEG, zoomFov } from '../../shared/viewbox.js';
 
 // The engine's fov is the short side of the canvas (proj_stereographic.c compute_fov).
 
@@ -73,4 +73,12 @@ test('RA offsets shrink with declination and wrap at 0/360', () => {
   // 0.1 deg of RA at Dec 60 is 0.05 deg on the sky, inside the 0.06 margin.
   assert.equal(boxCovers(box, { ra: 0.08, dec: 60 }, 0.4, W, H), true);
   assert.equal(boxCovers(box, { ra: 0.2, dec: 60 }, 0.4, W, H), false);
+});
+
+test('zoom buttons halve or double the field of view, capped at the widest view', () => {
+  assert.equal(zoomFov(0.1, 0.5), 0.05);
+  assert.equal(zoomFov(0.1, 2), 0.2);
+  assert.equal(zoomFov(80, 2), MAX_FOV_DEG);
+  assert.equal(zoomFov(MAX_FOV_DEG, 2), 105);
+  assert.equal(zoomFov(MAX_FOV_DEG, 0.5), 52.5);
 });

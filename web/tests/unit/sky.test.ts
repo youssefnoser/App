@@ -1,41 +1,8 @@
 import assert from 'node:assert/strict';
-import {
-  detectorBands,
-  zoomAt,
-  MIN_ZOOM,
-  MAX_ZOOM,
-  ZOOM_LEVELS,
-  getNextZoomIn,
-  getNextZoomOut,
-  type Camera,
-} from '../../lib/sky.ts';
+import { detectorBands } from '../../lib/sky.ts';
 import { svgNumber } from '../../lib/rotor.ts';
 
-// Test zoom levels and steps
-assert.equal(getNextZoomIn(1.0), 1.4);
-assert.equal(getNextZoomOut(1.4), 1.0);
-assert.equal(getNextZoomOut(1.0), 0.6);
-assert.equal(getNextZoomOut(0.6), 0.4);
-assert.equal(getNextZoomOut(0.4), 0.25);
-assert.equal(getNextZoomOut(0.25), 0.1);
-assert.equal((5 / 60) / MIN_ZOOM, 105);
-let wide = 0.25;
-for (let i = 0; i < 20; i++) wide = getNextZoomOut(wide);
-assert.equal(wide, MIN_ZOOM);
-assert.equal(getNextZoomIn(MIN_ZOOM), 0.0015);
-assert.equal(getNextZoomIn(14.0), 20.0);
-assert.equal(getNextZoomIn(20.0), 25.0);
-assert.equal(getNextZoomIn(25.0), 25.0);
-
-for (const anchor of [{ x: 0, y: 0 }, { x: 220, y: 310 }, { x: 1000, y: 800 }]) {
-  let camera: Camera = { zoom: 1, pan: { x: 120, y: -45 } };
-  const world = { x: (anchor.x - camera.pan.x) / camera.zoom, y: (anchor.y - camera.pan.y) / camera.zoom };
-  for (const value of [2.5, .25, 25, 1, 30, .1]) {
-    camera = zoomAt(camera, value, anchor);
-    assert(Math.hypot(world.x * camera.zoom + camera.pan.x - anchor.x, world.y * camera.zoom + camera.pan.y - anchor.y) < 1e-9);
-    assert(camera.zoom >= MIN_ZOOM && camera.zoom <= MAX_ZOOM);
-  }
-}
+// Zoom steps are tested with the shared module: tests/shared/viewbox.test.js (zoomFov).
 const all = Array.from({ length: 6 }, (_, i) => detectorBands(i + 1)).flat();
 assert.deepEqual(all, Array.from({ length: 102 }, (_, i) => i + 1));
 assert.equal(new Set(all).size, 102);

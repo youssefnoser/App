@@ -8,7 +8,7 @@ import { Loader, priorityList } from '/shared/queue.js';
 import { buildSteps, keepStep } from '/shared/timeline.js';
 import { PhotoCache } from '/shared/photos.js';
 import { parseHash, toHash } from '/shared/state.js';
-import { boxCovers, frameBox, LOAD_FOV_DEG } from '/shared/viewbox.js';
+import { boxCovers, frameBox, LOAD_FOV_DEG, zoomFov } from '/shared/viewbox.js';
 
 const HIPS = 'https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube';
 const SETTLE_MS = 300; // and once the view has been still this long
@@ -16,7 +16,6 @@ const PIXSCALE_ARCSEC = 3.075;
 const BLINK_MS = 500;
 const TARGET_FOV_DEG = 0.15; // field of view a target button flies to
 const GO_FOV_DEG = 0.25; // field of view after Go when zoomed out too far to load
-const MAX_FOV_DEG = 105; // widest zoom; the engine clamps there too (proj_stereographic.c)
 
 const COPY = {
   hint: 'Zoom in to load SPHEREx frames for this part of the sky.',
@@ -533,7 +532,7 @@ function wireControls() {
 
   const zoom = (factor) => {
     const c = app.sky.viewCentre();
-    app.sky.flyTo(c.ra, c.dec, Math.min(MAX_FOV_DEG, app.sky.fovDeg() * factor));
+    app.sky.flyTo(c.ra, c.dec, zoomFov(app.sky.fovDeg(), factor));
   };
   el.zoomIn.addEventListener('click', () => zoom(0.5));
   el.zoomOut.addEventListener('click', () => zoom(2));

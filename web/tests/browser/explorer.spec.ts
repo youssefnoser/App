@@ -88,33 +88,21 @@ test('Stellarium canvas renders, target crosshair displays, and features functio
   await expect(zoomInBtn).toBeVisible();
   await expect(zoomOutBtn).toBeVisible();
   const mapBottom = page.locator('.map-bottom');
+  // Zoom works as in the test bench: each button halves or doubles the field of view.
   await expect(mapBottom).toContainText('5.0 arcmin');
   await zoomInBtn.click();
-  await expect(mapBottom).toContainText('3.6 arcmin');
+  await expect(mapBottom).toContainText('2.5 arcmin');
   await zoomOutBtn.click();
   await expect(mapBottom).toContainText('5.0 arcmin');
-
-  // Test extended zoom out (wide sky view below previous 0.6 limit down to 0.25)
-  await zoomOutBtn.click(); // to 0.6 -> 8.3 arcmin
-  await expect(mapBottom).toContainText('8.3 arcmin');
-  await zoomOutBtn.click(); // to 0.4 -> 12.5 arcmin
-  await expect(mapBottom).toContainText('12.5 arcmin');
-  await zoomOutBtn.click(); // to 0.25 -> 20.0 arcmin
+  await zoomOutBtn.click();
+  await expect(mapBottom).toContainText('10.0 arcmin');
+  await zoomOutBtn.click();
   await expect(mapBottom).toContainText('20.0 arcmin');
   await expect(zoomOutBtn).toBeEnabled();
   await page.screenshot({ path: 'test-results/desktop-zoom-out-wide.png' });
 
-  // Test extended zoom in (deep sky magnification beyond previous 4.0 limit)
-  await zoomInBtn.click(); // to 0.4
-  await zoomInBtn.click(); // to 0.6
-  await zoomInBtn.click(); // to 1.0
-  await zoomInBtn.click(); // to 1.4
-  await zoomInBtn.click(); // to 2.0
-  await zoomInBtn.click(); // to 2.8
-  await zoomInBtn.click(); // to 4.0
-  await zoomInBtn.click(); // to 6.0 (exceeds previous 4.0 limit!)
-  await zoomInBtn.click(); // to 9.0
-  await zoomInBtn.click(); // to 14.0
+  for (let i = 0; i < 6; i++) await zoomInBtn.click();
+  await expect(mapBottom).toContainText('0.3 arcmin');
   await expect(zoomInBtn).toBeEnabled();
   await page.screenshot({ path: 'test-results/desktop-zoom-in-deep.png' });
 

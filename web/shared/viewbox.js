@@ -5,6 +5,17 @@
 export const LOAD_FOV_DEG = 0.5; // frames load only below this field of view
 export const SEQ_MIN_FOV_DEG = 0.05; // server limits for /api/sequence (server/app.py)
 export const SEQ_MAX_FOV_DEG = 1.0;
+// Widest zoom; the engine clamps there too (proj_stereographic.c).
+export const MAX_FOV_DEG = 105;
+
+/**
+ * Field of view after a zoom button: the current one times `factor` (0.5 in,
+ * 2 out), never wider than MAX_FOV_DEG. Mouse wheel and pinch zoom are left to
+ * the engine; pages only read its fov and never write it back.
+ */
+export function zoomFov(fovDeg, factor) {
+  return Math.min(MAX_FOV_DEG, fovDeg * factor);
+}
 
 /**
  * Side in degrees of the square box that holds the whole canvas, corners included,

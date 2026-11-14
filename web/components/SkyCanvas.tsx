@@ -2,10 +2,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createBackendSky, pointSky, readSkyCentre, HIPS, type BackendTimeline } from '@/shared/backend-sky.js';
 import { sequenceWindows } from '@/lib/backend-bands';
-import { MIN_ZOOM, MAX_ZOOM, type Camera, type Point } from '@/lib/sky';
+
+// A zoom the page asks for (zoom buttons, URL, recenter). `id` changes on every
+// request so asking for the same fov twice still applies it.
+export type FovRequest = { fov: number; id: number };
 
 type Props = {
-  camera: Camera;
+  fovRequest: FovRequest;
+  onFov?: (fovDeg: number) => void;
   frame: number;
   selected: number;
   bandCount: number;
@@ -24,10 +28,9 @@ type Props = {
   wiseEnabled?: boolean;
   recenterTrigger?: number;
   onCoordinatesChange?: (coords: { ra: number; dec: number }) => void;
-  onZoom: (value: number, anchor?: Point) => void;
-  onPan: (pan: Point) => void;
-  onResize: (size: Point) => void;
 };
+
+const D2R = Math.PI / 180;
 
 let engineScriptPromise: Promise<any> | null = null;
 function loadEngineScript(): Promise<any> {
@@ -116,7 +119,8 @@ function projectSkyToScreen(
 }
 
 export default function SkyCanvas({
-  camera,
+  fovRequest,
+  onFov,
   frame,
   bandCount,
   bands = [22],
@@ -134,9 +138,6 @@ export default function SkyCanvas({
   wiseEnabled = false,
   recenterTrigger,
   onCoordinatesChange,
-  onZoom,
-  onPan,
-  onResize,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -158,10 +159,16 @@ export default function SkyCanvas({
   coordinatesRef.current = coordinates;
   const onCoordinatesChangeRef = useRef(onCoordinatesChange);
   onCoordinatesChangeRef.current = onCoordinatesChange;
-  const onZoomRef = useRef(onZoom);
-  onZoomRef.current = onZoom;
-  const cameraZoomRef = useRef(camera.zoom);
-  cameraZoomRef.current = camera.zoom;
+  // Zoom works as in the test bench: the engine owns the fov (mouse wheel and
+  // pinch are handled inside it); this component only reads it, and applies
+  // explicit requests with zoomTo(fov, 0). It never writes the fov back.
+  const onFovRef = useRef(onFov);
+  onFovRef.current = onFov;
+  const fovRequestRef = useRef(fovRequest);
+  fovRequestRef.current = fovRequest;
+  const appliedFovRequest = useRef<number | null>(null);
+  const fovFrame = useRef<number | null>(null);
+  const [fovDeg, setFovDeg] = useState(fovRequest.fov);
   const isUpdatingFromInternal = useRef(false);
   const isUserDragging = useRef(false);
   const animFrameRef = useRef<number | null>(null);
@@ -215,12 +222,11 @@ export default function SkyCanvas({
       const bounds = el.getBoundingClientRect();
       if (bounds.width > 0 && bounds.height > 0) {
         setSize({ width: bounds.width, height: bounds.height });
-        onResize({ x: bounds.width, y: bounds.height });
       }
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [onResize]);
+  }, []);
 
   // Initialize Stellarium Web Engine
   useEffect(() => {
@@ -287,8 +293,8 @@ export default function SkyCanvas({
             pointToTarget(stel, coords);
 
             // Initial FOV
-            const fovRad = ((5 / 60) / Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoomRef.current))) * (Math.PI / 180);
-            core.fov = fovRad;
+            core.fov = fovRequestRef.current.fov * D2R;
+            appliedFovRequest.current = fovRequestRef.current.id;
 
             // Listen to observer movements / drag and zoom changes
             stel.change((_obj: any, attr: string) => {
@@ -298,23 +304,24 @@ export default function SkyCanvas({
                 if (isUserDragging.current && !isUpdatingFromInternal.current && core.observer) {
                   onCoordinatesChangeRef.current?.(readSkyCentre(stel));
                 }
-              } else if (attr === 'fov') {
-                updateReticlePosition();
-                if (!isUpdatingFromInternal.current && core.fov) {
-                  const fovDeg = (core.fov * 180) / Math.PI;
-                  const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, (5 / 60) / fovDeg));
-                  const limitedFov = ((5 / 60) / newZoom) * Math.PI / 180;
-                  if (Math.abs(core.fov - limitedFov) > 1e-7) {
-                    isUpdatingFromInternal.current = true;
-                    stel.zoomTo(limitedFov, 0);
-                    isUpdatingFromInternal.current = false;
-                  }
-                  if (Math.abs(newZoom - cameraZoomRef.current) > 0.00001) {
-                    onZoomRef.current(newZoom);
-                  }
-                }
               }
             });
+
+            // Read the fov every frame, as the test bench's settle loop does: the
+            // engine does not report every fov change (zoomTo is silent), so a
+            // change listener would leave the readout and the buttons stale.
+            let lastFov = 0;
+            const readFov = () => {
+              if (!active) return;
+              if (core.fov && Math.abs(core.fov - lastFov) > lastFov * 1e-6) {
+                lastFov = core.fov;
+                updateReticlePosition();
+                setFovDeg(core.fov / D2R);
+                onFovRef.current?.(core.fov / D2R);
+              }
+              fovFrame.current = requestAnimationFrame(readFov);
+            };
+            fovFrame.current = requestAnimationFrame(readFov);
 
             setReady(true);
             setTimeout(() => {
@@ -334,6 +341,8 @@ export default function SkyCanvas({
       backendRef.current = null;
       stelRef.current = null;
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (fovFrame.current !== null) cancelAnimationFrame(fovFrame.current);
+      fovFrame.current = null;
     };
   }, [updateReticlePosition]);
 
@@ -379,25 +388,14 @@ export default function SkyCanvas({
     }
   }, [grid]);
 
-  // Update FOV / Zoom from rotor / buttons
+  // Apply a zoom request from the page, as the test bench's zoom buttons do.
   useEffect(() => {
     const stel = stelRef.current;
-    if (stel?.core) {
-      const fovRad = ((5 / 60) / Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom))) * (Math.PI / 180);
-      if (Math.abs((stel.core.fov || 0) - fovRad) > 1e-7) {
-        isUpdatingFromInternal.current = true;
-        if (typeof stel.zoomTo === 'function') {
-          stel.zoomTo(fovRad, 0.1);
-        } else {
-          stel.core.fov = fovRad;
-        }
-        setTimeout(() => {
-          isUpdatingFromInternal.current = false;
-          updateReticlePosition();
-        }, 150);
-      }
-    }
-  }, [camera.zoom, updateReticlePosition]);
+    if (!stel?.core || appliedFovRequest.current === fovRequest.id) return;
+    appliedFovRequest.current = fovRequest.id;
+    stel.zoomTo(fovRequest.fov * D2R, 0);
+    updateReticlePosition();
+  }, [fovRequest.id, fovRequest.fov, ready, updateReticlePosition]);
 
   // Target marker stays fixed on the requested catalogue coordinates; motion is in the data.
   const offsetX = 0;
@@ -419,7 +417,7 @@ export default function SkyCanvas({
   const panScaleFactor = 1.0 - 0.45 * distRatio;
 
   // Zoom distance factor: scales down when zooming out into wide sky view
-  const zoomScaleFactor = Math.max(0.65, Math.min(1.15, 0.75 + 0.25 * camera.zoom));
+  const zoomScaleFactor = Math.max(0.65, Math.min(1.15, 0.75 + 0.25 * (5 / 60) / fovDeg));
 
   // Combined marker scale factor clamped between 0.40 and 1.15
   const markerScale = Math.max(0.4, Math.min(1.15, panScaleFactor * zoomScaleFactor));
