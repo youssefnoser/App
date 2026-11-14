@@ -10,6 +10,8 @@ import Rotor from './Rotor';
 import ZoomRuler from './ZoomRuler';
 import SkyCanvas, { type SkyGoto, type SkyView } from './SkyCanvas';
 import ImageMath from './ImageMath';
+import FrameFilterControl from './FrameFilterControl';
+import type { FrameFilter } from '@/lib/composite';
 import { GoogleMyLocationIcon, GoogleLayersIcon, FramesIcon } from './GoogleMapIcons';
 
 function SpaceTargetIcon({ type }: { type: string }) {
@@ -138,6 +140,8 @@ export default function SkyExplorer() {
   }, []);
   const [frame, setFrame] = useState(0), [playing, setPlaying] = useState(false), [speed, setSpeed] = useState(1), [loop, setLoop] = useState(true);
   const [showFrames, setShowFrames] = useState(true), [grid, setGrid] = useState(true), [bands, setBands] = useState<number[]>([22]);
+  // Raw, or every frame compared with the other visits (keeps working while playing).
+  const [frameFilter, setFrameFilter] = useState<FrameFilter>('raw');
   const [sequenceWavelength, setSequenceWavelength] = useState<number | undefined>(1.25);
   const [sequenceWidth, setSequenceWidth] = useState(.05);
   const [gaiaEnabled, setGaiaEnabled] = useState(false);
@@ -445,6 +449,7 @@ export default function SkyExplorer() {
         objectType={target?.type ?? 'CUSTOM COORDINATES'}
         gaiaEnabled={gaiaEnabled}
         wiseEnabled={wiseEnabled}
+        filter={frameFilter}
       />
       <div className="map-top">
         <div className="map-top-left">
@@ -464,6 +469,17 @@ export default function SkyExplorer() {
           />
           {!advancedOpen && (
             <div className="map-coordinate">ICRS <span>{readout.ra.toFixed(4)}°, {readout.dec >= 0 ? '+' : ''}{readout.dec.toFixed(4)}°</span></div>
+          )}
+        </div>
+        <div className="map-top-right">
+          {/* The filter changes how SPHEREx frames are drawn, so it shows while they do. */}
+          {showFrames && (
+            <FrameFilterControl
+              filter={frameFilter}
+              onFilter={setFrameFilter}
+              meta={sequence.steps[frame]?.meta ?? null}
+              hasFrames={frameCount > 0}
+            />
           )}
         </div>
       </div>

@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start -p 5173",
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types tests/sky.test.ts && node --experimental-strip-types tests/observations.test.ts && node --experimental-strip-types tests/spectral.test.ts && node --experimental-strip-types tests/zoom-ruler.test.ts && node --experimental-strip-types tests/load-progress.test.ts",
+    "test": "node --experimental-strip-types tests/sky.test.ts && node --experimental-strip-types tests/observations.test.ts && node --experimental-strip-types tests/spectral.test.ts && node --experimental-strip-types tests/zoom-ruler.test.ts && node --experimental-strip-types tests/load-progress.test.ts && node --experimental-strip-types tests/composite.test.ts",
     "test:browser": "playwright test"
   },
   "dependencies": {

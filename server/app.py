@@ -3,6 +3,8 @@
 Routes:
   GET /api/view?ra=&dec=&fov=            which patches and exposures cover a view
   GET /api/patch/{pix}/frame.png?uri=    one patch's crop of one exposure, as a PNG
+  GET /api/sequence?ra=&dec=&fov=        one box's exposures in time order (filter: see below)
+  GET /api/frame.png?uri=&ra=&dec=&fov=  one frame of that box, raw or filtered against other visits
 Static files: /engine (Stellarium Web Engine build) and / (web/), each mounted
 only if its directory exists, so the app imports without a vendor build.
 """
@@ -19,6 +21,7 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
@@ -29,7 +32,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from server import diskcache
+from server import composite, diskcache
 from server.catalog import catalog
 from server.cutouts import CutoutError, cache_dir, check_uri, fetch_cutout
 from server.irsa import Exposure, IrsaError, find_exposures
@@ -437,6 +440,8 @@ def patch_frame(
 # about 0.95 deg apart, so the box gets the same 2x margin as /api/view.
 SEQ_MIN_FOV, SEQ_MAX_FOV = 0.05, MAX_FOV_DEG
 SEQ_MAX_ROLL = 4
+# Frame filters (see "frame filters" below); "raw" is the frame as recorded.
+FrameFilter = Literal["raw", "difference", "previous", "trail"]
 _grids: dict[tuple, tuple] = {}
 _grids_guard = threading.Lock()
 # Bounded by bytes, not count: a 1 deg grid is 16 times a 0.25 deg one. The budget
@@ -541,11 +546,14 @@ def sequence(
     detector: int | None = Query(None, ge=1, le=6),
     wavelength: float | None = Query(None, ge=0.7, le=5.1),
     width: float = Query(0.05, gt=0, le=0.5),
+    filter: FrameFilter = Query("raw"),
 ) -> dict:
     """The time sequence of one detector at a point, shaped like `/api/view` with a
     single patch. `first` marks the first, middle and last exposure of each visit:
     the page loads those before the rest, so a blink across the whole time span is
-    possible after a few frames."""
+    possible after a few frames. `filter` (see `/api/frame.png`) only changes the
+    box's patch number and is echoed in `sequence`, so raw and filtered frames of
+    the same box never share a cache entry on the page."""
     ra, dec, fov = round(ra, 5), round(dec, 5), round(fov, 3)
     if (detector is None) == (wavelength is None):
         raise HTTPException(422, "Give either a detector or a wavelength.")
@@ -563,11 +571,13 @@ def sequence(
     coarse = set()
     for members in by_visit.values():
         coarse.update(m.uri for m in (members[0], members[len(members) // 2], members[-1]))
-    pix = _seq_pix(ra, dec, fov, f"{detector}|{wavelength}|{width}")
+    pix = _seq_pix(ra, dec, fov, f"{detector}|{wavelength}|{width}"
+                   + ("" if filter == "raw" else f"|{filter}"))
     return {
         "cell": pix,
         "sequence": {"ra": ra, "dec": dec, "fov": fov, "detector": detector,
-                     "wavelength": wavelength, "width": width, "pixels": _seq_size(fov)},
+                     "wavelength": wavelength, "width": width, "pixels": _seq_size(fov),
+                     "filter": filter},
         "cells": [{"pix": pix, "ra": ra, "dec": dec, "ring": 0}],
         "exposures": [
             {"uri": e.uri, "obs_id": e.obs_id, "mjd": e.mjd,
@@ -582,25 +592,30 @@ def sequence(
     }
 
 
-def _render_sequence_frame(uri: str, ra: float, dec: float, fov: float, roll: int,
-                           wavelength: float | None = None, width: float = 0.05):
-    """One sequence image: the exposure itself (`roll=0`) or the NaN-ignoring median
-    of it and up to `roll` exposures either side from the same visit and detector.
-    Neighbours that fail or miss the box are left out; the exposure itself must work."""
+def _items_for(ra: float, dec: float, meta: dict, wavelength: float | None, width: float):
+    """The filtered sequence a frame belongs to: the page's wavelength window, or the
+    frame's own detector in detector mode."""
+    if wavelength is not None:
+        return _sequence(ra, dec, None, wavelength, width)
+    return _sequence(ra, dec, meta["detector"])
+
+
+def _sequence_grid(uri: str, ra: float, dec: float, fov: float, roll: int,
+                   items) -> tuple[np.ndarray, dict]:
+    """One sequence image as a grid: the exposure itself (`roll=0`) or the NaN-ignoring
+    median of it and up to `roll` exposures either side from the same visit, taken
+    from `items` (the filtered sequence, so in wavelength mode the median only mixes
+    exposures of nearly the same colour). Neighbours that fail are left out; the
+    exposure itself must work."""
     grid, wavelength_um, meta = _seq_grid(uri, ra, dec, fov)
     if roll == 0:
-        return to_png(grid), {**meta, "wavelength_um": wavelength_um}
-    # Neighbours come from the same filtered sequence the page is showing, so in
-    # wavelength mode the median only mixes exposures of nearly the same colour.
-    items = [(e, v) for e, v, _ in (
-        _sequence(ra, dec, None, wavelength, width) if wavelength is not None
-        else _sequence(ra, dec, meta["detector"]))]
-    uris = [e.uri for e, _ in items]
+        return grid, {**meta, "wavelength_um": wavelength_um}
+    uris = [e.uri for e, _, _ in items]
     grids, waves = [grid], [wavelength_um]
     if uri in uris:
         at = uris.index(uri)
         visit = items[at][1]
-        near = [e.uri for e, v in items[max(at - roll, 0):at + roll + 1]
+        near = [e.uri for e, v, _ in items[max(at - roll, 0):at + roll + 1]
                 if v == visit and e.uri != uri]
 
         def one(other: str):
@@ -617,8 +632,112 @@ def _render_sequence_frame(uri: str, ra: float, dec: float, fov: float, roll: in
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pixels stay NaN
         median = np.nanmedian(np.stack(grids), axis=0).astype(np.float32)
-    return to_png(median), {**meta, "wavelength_um": float(np.median(waves)),
-                            "stack": len(grids)}
+    return median, {**meta, "wavelength_um": float(np.median(waves)), "stack": len(grids)}
+
+
+# ---------------------------------------------------------------- frame filters
+#
+# Every blink frame compared with the other visits of its box (server/composite.py):
+#   difference  the frame minus the static sky (median of every exposure)
+#   previous    the frame minus the median of the visit before it
+#   trail       earlier visits and the frame, each tinted by its date
+# The references are built once per box from the same grids the blink loads.
+
+_refs: dict[tuple, dict] = {}
+_refs_guard = threading.Lock()
+_ref_locks: dict[tuple, threading.Lock] = {}
+MAX_REFERENCE_SETS = 4  # boxes whose references stay in memory
+
+
+def _date(mjd: float) -> str:
+    return Time(mjd, format="mjd").iso[:10]
+
+
+def _references(items, ra: float, dec: float, fov: float) -> dict:
+    """{"visits": [{visit, start, end, exposures, median}], "static": median} for a
+    filtered sequence, in time order. Each median ignores NaN, so a pixel blank in
+    some exposures is filled by the others. Exposures that cannot be fetched are left
+    out, and a visit with none left is dropped; with no visit left it raises
+    CutoutError. Built once per sequence and shared by concurrent requests."""
+    key = (ra, dec, fov, tuple(e.uri for e, _, _ in items))
+    with _refs_guard:
+        hit = _refs.get(key)
+        if hit is None:
+            lock = _ref_locks.setdefault(key, threading.Lock())
+    if hit is not None:
+        return hit
+    with lock:
+        with _refs_guard:
+            hit = _refs.get(key)
+        if hit is not None:
+            return hit
+
+        def one(e: Exposure):
+            try:
+                return _seq_grid(e.uri, ra, dec, fov)[0]
+            except CutoutError:
+                return None
+
+        with ThreadPoolExecutor(8) as pool:
+            grids = list(pool.map(one, [e for e, _, _ in items]))
+        by_visit: dict[int, list[tuple[Exposure, np.ndarray]]] = {}
+        for (e, visit, _), grid in zip(items, grids):
+            if grid is not None:
+                by_visit.setdefault(visit, []).append((e, grid))
+        if not by_visit:
+            raise CutoutError("No exposure of this sequence could be fetched.")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pixels stay NaN
+            visits = [
+                {"visit": v, "start": _date(members[0][0].mjd), "end": _date(members[-1][0].mjd),
+                 "exposures": len(members),
+                 "median": np.nanmedian(np.stack([g for _, g in members]), axis=0).astype(np.float32)}
+                for v, members in sorted(by_visit.items())
+            ]
+            static = np.nanmedian(np.stack([g for g in grids if g is not None]), axis=0).astype(np.float32)
+        out = {"visits": visits, "static": static}
+        with _refs_guard:
+            _refs[key] = out
+            _ref_locks.pop(key, None)
+            while len(_refs) > MAX_REFERENCE_SETS:
+                _refs.pop(next(iter(_refs)))
+    return out
+
+
+def _visit_label(v: dict) -> dict:
+    return {"start": v["start"], "end": v["end"], "exposures": v["exposures"]}
+
+
+def _filtered_png(name: FrameFilter, grid: np.ndarray, uri: str, mjd: float, items,
+                  ra: float, dec: float, fov: float) -> tuple[bytes, dict]:
+    """The filtered PNG of one frame and what the page needs for its colour key."""
+    refs = _references(items, ra, dec, fov)
+    visits = refs["visits"]
+    own = next((v for e, v, _ in items if e.uri == uri), None)
+    at = next((i for i, v in enumerate(visits) if v["visit"] == own), None)
+    if at is None:  # the frame's visit could not be fetched: the visit nearest in time
+        at = min(range(len(visits)), key=lambda i: abs(Time(visits[i]["start"]).mjd - mjd))
+    if name == "difference":
+        total = sum(v["exposures"] for v in visits)
+        return composite.difference(refs["static"], grid), {
+            "filter": name,
+            "reference": {"kind": "static", "start": visits[0]["start"], "end": visits[-1]["end"],
+                          "exposures": total, "visits": len(visits)}}
+    if name == "previous":
+        # The first visit has nothing earlier: it is compared with the next one. With
+        # a single visit, with its own median (what moved within the visit).
+        other, kind = ((at - 1, "previous") if at > 0 else
+                       (at + 1, "next") if len(visits) > 1 else (at, "same"))
+        return composite.difference(visits[other]["median"], grid), {
+            "filter": name, "reference": {"kind": kind, **_visit_label(visits[other])}}
+    span = max(len(visits) - 1, 1)
+    colours = [composite.date_colour(i / span if len(visits) > 1 else 1.0) for i in range(len(visits))]
+    layers = [(v["median"], colours[i]) for i, v in enumerate(visits[:at])] + [(grid, colours[at])]
+    return composite.trail(layers), {
+        "filter": name,
+        "trail": [{**_visit_label(v), "colour": [round(255 * c) for c in colours[i]],
+                   "shown": i <= at, "current": i == at}
+                  for i, v in enumerate(visits)]}
 
 
 @app.get("/api/frame.png")
@@ -630,31 +749,54 @@ def sequence_frame(
     roll: int = Query(2, ge=0, le=SEQ_MAX_ROLL),
     wavelength: float | None = Query(None, ge=0.7, le=5.1),
     width: float = Query(0.05, gt=0, le=0.5),
+    filter: FrameFilter = Query("raw"),
 ) -> Response:
+    """One frame of a sequence box. `filter` other than `raw` compares it with the
+    other visits of the same sequence (`wavelength` and `width` as the page asked
+    `/api/sequence`; without them, the frame's own detector): `difference` against
+    the static sky, `previous` against the visit before, `trail` adds earlier
+    visits tinted by date. The X-Frame-Meta header then carries the reference
+    (`reference`) or the visits and colours of the trail (`trail`)."""
     try:
         check_uri(uri)
     except ValueError as err:
         raise HTTPException(422, "That is not a SPHEREx file path.") from err
     ra, dec, fov = round(ra, 5), round(dec, 5), round(fov, 3)
-    mix = f"|{wavelength}|{width}" if wavelength is not None and roll else ""
-    name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}|{roll}{mix}".encode()).hexdigest()
-    base = cache_dir() / "png" / f"v{RENDER_VERSION}-seq" / name[:2] / name
-    png_path, meta_path = base.with_suffix(".png"), base.with_suffix(".json")
     try:
-        png, meta = _read_cached(png_path, meta_path)
-    except (OSError, ValueError):
+        if filter == "raw" and roll == 0:
+            items = []
+        else:
+            items = _items_for(ra, dec, _seq_grid(uri, ra, dec, fov)[2], wavelength, width)
+        if filter == "raw":
+            # unchanged cache names, so frames warmed before filters existed stay valid
+            mix = f"|{wavelength}|{width}" if wavelength is not None and roll else ""
+            name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}|{roll}{mix}".encode()).hexdigest()
+        else:
+            members = ",".join(e.uri for e, _, _ in items)  # new exposures, new references
+            name = hashlib.sha1(
+                f"{uri}|{ra}|{dec}|{fov}|{roll}|{wavelength}|{width}|{filter}|{members}".encode()
+            ).hexdigest()
+        base = cache_dir() / "png" / f"v{RENDER_VERSION}-seq" / name[:2] / name
+        png_path, meta_path = base.with_suffix(".png"), base.with_suffix(".json")
         try:
-            png, meta = _render_sequence_frame(uri, ra, dec, fov, roll, wavelength, width)
-        except IrsaError as err:
-            raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
-        except CutoutError as err:
-            raise HTTPException(502, MIRROR_DOWN) from err
-        except Exception as err:  # a file the pipeline cannot read
-            raise HTTPException(
-                502, "The SPHEREx copy on AWS (the mirror) returned a frame that could not be"
-                     " drawn. Try another frame.") from err
-        _write_atomic(meta_path, json.dumps(meta).encode())
-        _write_atomic(png_path, png)
+            png, meta = _read_cached(png_path, meta_path)
+        except (OSError, ValueError):
+            grid, meta = _sequence_grid(uri, ra, dec, fov, roll, items)
+            if filter == "raw":
+                png = to_png(grid)
+            else:
+                png, extra = _filtered_png(filter, grid, uri, meta["mjd_start"], items, ra, dec, fov)
+                meta = {**meta, **extra}
+            _write_atomic(meta_path, json.dumps(meta).encode())
+            _write_atomic(png_path, png)
+    except IrsaError as err:
+        raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
+    except CutoutError as err:
+        raise HTTPException(502, MIRROR_DOWN) from err
+    except Exception as err:  # a file the pipeline cannot read
+        raise HTTPException(
+            502, "The SPHEREx copy on AWS (the mirror) returned a frame that could not be"
+                 " drawn. Try another frame.") from err
     return Response(
         png,
         media_type="image/png",

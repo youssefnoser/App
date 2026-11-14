@@ -2794,3 +2794,117 @@ html, body, main, .sky {
 .band-pop-reset:hover { color: #f8fafc; }
 .band-pop-note { margin: 0; color: #64748b; font-size: 11px; line-height: 1.5; }
 @media (max-width: 700px) { .band-pop { width: calc(100vw - 24px); } }
+
+/* Frame filter (components/FrameFilterControl.tsx): top right of the map, above
+   the toolbar it belongs with (the "Show SPHEREx frames" toggle hides both). Same
+   surface, border, radius and pressed state as .map-tools, so it reads as part
+   of that set; solid, not glass: the toolbar and band popover already carry the
+   blur. The key hangs under the switch, beside the toolbar rather than over it,
+   and has no accent of its own: its colours are the ones on the map. */
+.map-top-right {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-left: auto;
+  pointer-events: none;
+}
+.map-top-right > * {
+  pointer-events: auto;
+}
+.frame-filter-switch {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  background: rgba(5, 8, 16, 0.92);
+}
+.frame-filter-switch button {
+  padding: 7px 11px;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.frame-filter-switch button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+}
+.frame-filter-switch button[aria-pressed='true'] {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+}
+.frame-filter-key {
+  position: absolute;
+  top: 100%;
+  right: 58px; /* clear of the toolbar column under the switch */
+  margin-top: 8px;
+  width: 270px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  background: rgba(5, 8, 16, 0.94);
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.frame-filter-key ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.frame-filter-key li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.frame-filter-key li.is-dim {
+  color: #94a3b8;
+}
+.frame-filter-key li.is-dim .frame-filter-swatch {
+  opacity: 0.35;
+}
+.frame-filter-swatch {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  margin-top: 3px;
+  border-radius: 2px;
+  outline: 1px solid rgba(255, 255, 255, 0.4); /* keeps pure blue visible on the dark key */
+}
+.frame-filter-key p {
+  margin: 0;
+}
+.frame-filter-key ul + p {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+}
+/* Phones: the left controls take the whole top row, so the filter gets the row
+   under it, right-aligned like the toolbar; the key follows below. */
+@media (max-width: 700px) {
+  .map-top-right {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+  }
+  .frame-filter-key {
+    width: min(270px, calc(100vw - 100px));
+  }
+  /* The floating status toast lands on the key here; its text is also in the
+     status line at the bottom of the map, so it steps aside while the key is up. */
+  body:has(.frame-filter-key) .search-feedback {
+    visibility: hidden;
+  }
+}
+@media (pointer: coarse) {
+  .frame-filter-switch button {
+    min-height: 36px;
+  }
+}

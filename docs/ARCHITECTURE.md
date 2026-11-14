@@ -72,7 +72,8 @@ Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6
 | `scripts/snapshot_from_aws.py` | fill the snapshot from the AWS mirror alone: list the bucket, read each file's header, resumable (network) |
 | `server/pixels.py` | `science_image()` (IMAGE minus ZODI, saturation-aware masking), `masked_pixels()`, `BAD_PIXEL_MASK`, `HARD_PIXEL_MASK` |
 | `server/reproject.py` | `resample_north_up()` (NaN-aware north-up resampling), `wavelength_at()` |
-| `server/app.py` | routes, `render_frame_cached()`, `RENDER_VERSION` in the PNG cache path |
+| `server/app.py` | routes, `render_frame_cached()`, `RENDER_VERSION` in the PNG cache path; frame filters on `/api/frame.png` (`filter=difference|previous|trail`) with per-box visit references (`_references()`) |
+| `server/composite.py` | frame filter image maths: `difference()` (frame minus a reference, red/blue), `trail()` (images tinted by date, combined), `date_colour()` |
 | `scripts/resolve_targets.py` | one-off: SIMBAD positions and proper motions, cross-checked against Gaia DR3 |
 | `scripts/check_targets.py` | exposure counts per challenge target (network) |
 | `scripts/prewarm.py` | warm every frame the browser would request, and report the cost (network on a cold cache) |
@@ -105,6 +106,8 @@ from `/engine/`.
 | `web/lib/zoom-ruler.ts` | Ruler geometry: field ↔ offset, ticks and labels, readout text, 1.25× steps |
 | `web/lib/load-progress.ts` | Plain-language title, detail and progress fractions for `onProgress`, shown on the time dial (arcs and status line) and under the ruler |
 | `web/lib/backend-bands.ts` | Map the existing selected bands into backend wavelength windows or detector queries |
+| `web/lib/composite.ts` | Frame filter names (`FILTERS`) and the colour key for the frame on screen, from its `X-Frame-Meta` (`filterKey()`, `visitSpan()`) |
+| `web/components/FrameFilterControl.tsx` | Raw / Difference / Previous visit / Trail switch at the top right of the map (shown while SPHEREx frames are), and the colour key; the filter is part of the box selection in `backend-sky.js` (`setFilter`), so it keeps working while the blink plays |
 | `web/app/api/[...path]/route.ts` | Same-origin streaming proxy for the backend's target, view, patch, sequence and frame endpoints; preserves `X-Frame-Meta` |
 
 Run Next.js from `web/`. `SPHEREX_BACKEND_URL` defaults to

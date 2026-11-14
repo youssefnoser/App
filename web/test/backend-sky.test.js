@@ -541,3 +541,53 @@ test('progress says when frames cannot load: zoomed out, backend down, failed fr
  assert.deepEqual(progress.at(-1),{phase:'failed',done:1,total:2,failed:1,cleaned:0});
  controller.destroy();
 });
+
+test('a filtered box asks for filtered frames, with the window even before the cleaned upgrade', () => {
+ const sequence={ra:269.4,dec:4.7,fov:.15,wavelength:1.25,width:.05,filter:'trail'};
+ const raw=new URL(frameAddress(sequence,'ibe/a.fits',false),'http://localhost');
+ assert.equal(raw.searchParams.get('filter'),'trail');
+ assert.equal(raw.searchParams.get('roll'),'0');
+ assert.equal(raw.searchParams.get('wavelength'),'1.25');
+ assert.equal(raw.searchParams.get('width'),'0.05');
+ const plain=new URL(frameAddress({...sequence,filter:'raw'},'ibe/a.fits',false),'http://localhost');
+ assert.equal(plain.searchParams.get('filter'),null);
+ assert.equal(plain.searchParams.get('wavelength'),null);
+});
+
+test('switching the filter plays the filtered frames, and switching back reuses the raw ones', async () => {
+ const calls=[],timelines=[];
+ const live=new Set();
+ const layer={visible:true,add:(_type,args)=>{const p={...args};live.add(p);return p;},remove:p=>live.delete(p)};
+ const stel={core:{fov:.15*Math.PI/180,observer:{yaw:30*Math.PI/180,pitch:20*Math.PI/180},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const cache=createFrontendCache({storage:null,fetchFn:async(url)=>{
+   calls.push(url);
+   const filter=new URL(url,'http://localhost').searchParams.get('filter') ?? 'raw';
+   const cell=filter==='raw' ? -1 : -2; // the server gives a filtered box its own patch number
+   if(url.includes('/sequence')) return Response.json({cell,sequence:{ra:30,dec:20,fov:.2,wavelength:1.2,width:.01,filter},cells:[{pix:cell,ra:30,dec:20,ring:0}],exposures:[
+    {uri:'one',mjd:1,date:'2025-01-01',detector:2,first:true,cells:[cell]},
+    {uri:'two',mjd:200,date:'2025-07-20',detector:2,first:true,cells:[cell]}]});
+   return new Response(new Uint8Array([1]),{headers:{'X-Frame-Meta':JSON.stringify({detector:2,...(filter==='raw' ? {} : {filter,reference:{kind:'static'}})})}});
+ }});
+ const controller=createBackendSky(skyOf(stel),{fetchFn:cache.fetch,onTimeline:t=>timelines.push(t),schedule:()=>0,cancel:()=>{}});
+ controller.setFill(false);
+ controller.setBands([{wavelength:1.2,width:.01}],20);
+ await controller.refresh({ra:30,dec:20},.15);
+ await settle();
+ assert.equal(timelines.at(-1).steps[0].meta.filter,undefined);
+ controller.setFilter('difference');
+ await controller.refresh({ra:30,dec:20},.15);
+ await settle();
+ const sequenceCall=calls.filter(url=>url.includes('/sequence')).at(-1);
+ assert.equal(new URL(sequenceCall,'http://localhost').searchParams.get('filter'),'difference');
+ assert(calls.some(url=>url.includes('/frame.png') && url.includes('filter=difference')));
+ assert.equal(timelines.at(-1).steps.length,2);
+ assert.equal(timelines.at(-1).steps[0].meta.filter,'difference');
+ assert.equal([...live].filter(p=>p.visible).length,1,'one frame on screen, the filtered one');
+ const warm=calls.filter(url=>url.includes('/frame.png')).length;
+ controller.setFilter('raw');
+ await controller.refresh({ra:30,dec:20},.15);
+ await settle();
+ assert.equal(calls.filter(url=>url.includes('/frame.png')).length,warm,'raw frames come from the cache');
+ assert.equal(timelines.at(-1).steps[0].meta.filter,undefined,'raw metadata, not the filtered one');
+ controller.destroy();
+});

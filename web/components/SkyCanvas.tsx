@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { initSky, type Sky } from '@/js/sky.js';
 import { createBackendSky, type BackendTimeline, type LoadProgress } from '@/js/backend-sky.js';
 import { sequenceWindows } from '@/lib/backend-bands';
+import type { FrameFilter } from '@/lib/composite';
 
 export type SkyView = { ra: number; dec: number; fovDeg: number };
 // A command to move the view. A new `id` runs it once; without ra/dec it keeps
@@ -27,6 +28,8 @@ type Props = {
   onProgress: (progress: LoadProgress) => void;
   onView: (view: SkyView) => void;
   showFrames: boolean;
+  // How every frame of the blink is drawn: raw, or compared with other visits.
+  filter: FrameFilter;
   grid: boolean;
   name: string;
   objectType: string;
@@ -60,6 +63,7 @@ export default function SkyCanvas({
   objectType,
   gaiaEnabled,
   wiseEnabled,
+  filter,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const skyRef = useRef<Sky | null>(null);
@@ -145,6 +149,7 @@ export default function SkyCanvas({
     backendRef.current?.setBands(sequenceWindows(bands, sequenceWavelength, sequenceWidth), backgroundFrame);
   }, [bandKey, sequenceWavelength, sequenceWidth, backgroundFrame, ready]);
   useEffect(() => { backendRef.current?.setVisible(showFrames); }, [showFrames, ready]);
+  useEffect(() => { backendRef.current?.setFilter(filter); }, [filter, ready]);
   useEffect(() => {
     if (skyRef.current) skyRef.current.core.lines.equatorial.visible = grid;
   }, [grid, ready]);

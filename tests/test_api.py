@@ -1,10 +1,12 @@
 """Offline tests for the view and patch-frame routes. IRSA calls are patched."""
 
+import io
 import json
 import re
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -462,6 +464,7 @@ def seq_setup(monkeypatch, tmp_path, count=5):
 
     monkeypatch.setattr(app_module, "fetch_crop", crop)
     app_module._grids.clear()
+    app_module._refs.clear()
     return members, asked
 
 
@@ -764,3 +767,102 @@ def test_grid_memory_hit_counts_as_use(aws_client, monkeypatch, tmp_path):
     os.utime(npz, (stamp, stamp))
     app_module._seq_grid("ibe/data/spherex/s2.fits", 269.4463, 4.7677, 0.05)  # from memory
     assert time.time() - npz.stat().st_mtime < 60
+
+
+# --- frame filters: every frame compared with the other visits of its box ---
+
+
+def frame_meta(response) -> dict:
+    assert response.status_code == 200, response.text
+    return json.loads(response.headers["x-frame-meta"])
+
+
+def pixels(response) -> np.ndarray:
+    return np.asarray(Image.open(io.BytesIO(response.content)))
+
+
+def test_sequence_filter_gets_its_own_box(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+    raw = aws_client.get(f"/api/sequence?{SEQ}&detector=6").json()
+    diff = aws_client.get(f"/api/sequence?{SEQ}&detector=6&filter=difference").json()
+    assert raw["sequence"]["filter"] == "raw" and diff["sequence"]["filter"] == "difference"
+    assert diff["cell"] != raw["cell"] and diff["cell"] < 0
+    assert [e["uri"] for e in diff["exposures"]] == [e["uri"] for e in raw["exposures"]]
+
+
+def test_difference_filter_against_the_static_sky(aws_client, monkeypatch, tmp_path):
+    _, asked = seq_setup(monkeypatch, tmp_path)
+    r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s2.fits&{SEQ}&roll=0&filter=difference")
+    meta = frame_meta(r)
+    assert meta["filter"] == "difference"
+    assert meta["reference"] == {"kind": "static", "start": "2025-11-21", "end": "2026-06-09",
+                                 "exposures": 6, "visits": 2}
+    assert pixels(r)[..., :3].max() == 0  # every exposure is the same image: nothing changed
+    assert sorted(set(asked)) == sorted(f"ibe/data/spherex/{n}" for n in
+                                        ["s0.fits", "s1.fits", "s2.fits", "s3.fits", "s4.fits", "far.fits"])
+
+
+def test_previous_filter_compares_with_the_visit_before_or_the_next_for_the_first(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+    late = frame_meta(aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/far.fits&{SEQ}&roll=0&filter=previous"))
+    assert late["reference"] == {"kind": "previous", "start": "2025-11-21", "end": "2025-11-25", "exposures": 5}
+    early = frame_meta(aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{SEQ}&roll=0&filter=previous"))
+    assert early["reference"] == {"kind": "next", "start": "2026-06-09", "end": "2026-06-09", "exposures": 1}
+
+
+def test_trail_filter_draws_earlier_visits_and_this_frame_by_date(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+    early = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{SEQ}&roll=0&filter=trail")
+    meta = frame_meta(early)
+    assert [(v["colour"], v["shown"], v["current"]) for v in meta["trail"]] == [
+        ([255, 0, 0], True, True), ([0, 0, 255], False, False)]
+    px = pixels(early)
+    opaque = px[..., 3] == 255
+    assert px[..., 0][opaque].max() > 0 and px[..., 1:3][opaque].max() == 0  # first visit only: red
+    late = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/far.fits&{SEQ}&roll=0&filter=trail")
+    assert [v["shown"] for v in frame_meta(late)["trail"]] == [True, True]
+    px = pixels(late)
+    opaque = px[..., 3] == 255
+    assert (px[..., 0][opaque] == px[..., 2][opaque]).all()  # same sky both visits: red + blue alike
+
+
+def test_references_are_built_once_per_box(aws_client, monkeypatch, tmp_path):
+    _, asked = seq_setup(monkeypatch, tmp_path)
+    for name in ["s0", "s1", "far"]:
+        for f in ["difference", "previous", "trail"]:
+            frame_meta(aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/{name}.fits&{SEQ}&roll=0&filter={f}"))
+    assert len(asked) == 6  # each exposure fetched once
+
+
+def test_filtered_frame_is_served_from_disk_the_second_time(aws_client, monkeypatch, tmp_path):
+    _, asked = seq_setup(monkeypatch, tmp_path)
+    url = f"/api/frame.png?uri=ibe/data/spherex/s1.fits&{SEQ}&roll=0&filter=trail"
+    first = aws_client.get(url)
+    app_module._grids.clear()
+    app_module._refs.clear()
+    again = aws_client.get(url)
+    assert again.content == first.content
+    assert again.headers["x-frame-meta"] == first.headers["x-frame-meta"]
+    assert len(asked) == 6  # the second time nothing is downloaded: PNG and grid come from disk
+
+
+def test_a_visit_that_cannot_be_fetched_is_left_out_of_the_references(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+    from astropy.io import fits
+
+    def crop(uri, ra, dec, size):
+        if uri.endswith("far.fits"):
+            raise CutoutError("nope")
+        return fits.open(FIXTURES / "crop_barnard_D6_2026-03-19.fits")
+
+    monkeypatch.setattr(app_module, "fetch_crop", crop)
+    meta = frame_meta(aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{SEQ}&roll=0&filter=previous"))
+    assert meta["reference"]["kind"] == "same"  # only one visit left: its own median
+    r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/far.fits&{SEQ}&roll=0&filter=previous")
+    assert r.status_code == 502
+
+
+def test_frame_rejects_unknown_filter(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+    r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{SEQ}&filter=blur")
+    assert r.status_code == 422
