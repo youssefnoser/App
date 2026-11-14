@@ -24,7 +24,7 @@ Python 3.11+ with uv. Frontend is vanilla ES modules, no build step, Node 22 for
 ```bash
 uv sync                          # install
 uv run pytest -q                 # server tests (offline)
-node --test web/test/            # frontend tests
+npm test                         # frontend tests (node --test 'web/test/*.test.js'; a bare directory fails on Node 24)
 uv run uvicorn server.app:app --reload --port 8000   # run (serves web/ at /)
 ```
 
