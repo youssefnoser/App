@@ -2,6 +2,7 @@
 
 import io
 import os
+import time
 import warnings
 from pathlib import Path
 
@@ -105,6 +106,33 @@ def test_evict_drops_least_recently_used_first(isolated_cache, monkeypatch):
     monkeypatch.setattr(mirror, "cache_cap_bytes", lambda: 2500)
     evict()
     assert sorted(p.stem for p in folder.glob("*.fits")) == ["mid", "new"]
+
+
+def test_evict_deletes_downloads_abandoned_by_a_killed_server(isolated_cache, monkeypatch):
+    # A server killed mid-download leaves its .raw.tmp behind; nothing else would
+    # ever delete it. One still being written (recent) must stay.
+    folder = isolated_cache / "exposures"
+    folder.mkdir(parents=True)
+    stale, live = folder / "tmpold.raw.tmp", folder / "tmpnew.raw.tmp"
+    stale.write_bytes(b"x" * 1000)
+    live.write_bytes(b"x" * 1000)
+    old = time.time() - 2 * mirror.TMP_MAX_AGE_S
+    os.utime(stale, (old, old))
+    monkeypatch.setattr(mirror, "cache_cap_bytes", lambda: 10**9)
+    evict()
+    assert not stale.exists()
+    assert live.exists()
+
+
+def test_evict_counts_live_downloads_towards_the_cap(isolated_cache, monkeypatch):
+    folder = isolated_cache / "exposures"
+    folder.mkdir(parents=True)
+    done = folder / "done.fits"
+    done.write_bytes(b"x" * 1000)
+    (folder / "tmpnew.raw.tmp").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(mirror, "cache_cap_bytes", lambda: 1500)
+    evict()
+    assert not done.exists()
 
 
 def test_evict_never_drops_the_file_just_stored(isolated_cache, monkeypatch):

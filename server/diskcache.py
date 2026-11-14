@@ -3,7 +3,7 @@
 The folders this module owns are `png/` (rendered frames and their metadata),
 `grids/` (resampled float grids), `cutouts/` (IRSA cutouts) and `tap/` (cell
 exposure lists fetched from IRSA). Together they are held under
-`cap_bytes()` (SPHEREX_RENDER_CACHE_GB, default 10) by deleting the least
+`cap_bytes()` (SPHEREX_RENDER_CACHE_GB, default 3) by deleting the least
 recently used files first. A cache hit calls `touch`, so "used" means read or
 written, not only written.
 
@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-DEFAULT_CAP_GB = 10.0
+DEFAULT_CAP_GB = 3.0  # with exposures (6 GB) and meta/, the cache stays under 10 GB
 FOLDERS = ("png", "grids", "cutouts", "tap")
 # A prune walks every file, so it runs after PRUNE_EVERY writes and never more
 # often than PRUNE_MIN_INTERVAL_S: a few seconds of disk reads per ten minutes
@@ -39,7 +39,7 @@ _running = threading.Lock()
 
 
 def cap_bytes() -> int:
-    """Size limit of the rendered caches: SPHEREX_RENDER_CACHE_GB, default 10.
+    """Size limit of the rendered caches: SPHEREX_RENDER_CACHE_GB, default 3.
     A value that is not a finite number falls back to the default."""
     try:
         gb = float(os.environ.get("SPHEREX_RENDER_CACHE_GB", DEFAULT_CAP_GB))

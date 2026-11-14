@@ -17,6 +17,7 @@ import math
 import os
 import tempfile
 import threading
+import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -34,7 +35,11 @@ MIRROR_BASE = "https://nasa-irsa-spherex.s3.amazonaws.com"
 URI_PREFIX = "ibe/data/spherex/"
 KEEP_HDUS = ("IMAGE", "FLAGS", "ZODI", "WCS-WAVE")
 PIXEL_ARCSEC = 6.15
-DEFAULT_CAP_GB = 20.0
+# 6 GB here, 3 GB of rendered caches (server/diskcache.py) and the ~0.8 GB
+# exposure snapshot (meta/) keep the whole cache folder under 10 GB.
+DEFAULT_CAP_GB = 6.0
+# A download's .tmp files older than this were left by a server killed mid-download.
+TMP_MAX_AGE_S = 3600.0
 
 # Never more than 8 file downloads at once, the same cap the IRSA path uses.
 MAX_DOWNLOADS = 8
@@ -54,7 +59,7 @@ def mirror_url(uri: str) -> str:
 
 
 def cache_cap_bytes() -> int:
-    """Size limit of the exposure cache: SPHEREX_EXPOSURE_CACHE_GB, default 20.
+    """Size limit of the exposure cache: SPHEREX_EXPOSURE_CACHE_GB, default 6.
     A value that is not a finite number falls back to the default."""
     try:
         gb = float(os.environ.get("SPHEREX_EXPOSURE_CACHE_GB", DEFAULT_CAP_GB))
@@ -163,16 +168,29 @@ def evict(keep: Path | None = None) -> None:
     """Delete least recently used exposures until the cache is under its cap.
 
     `keep` is never deleted, so a cap smaller than one file still serves requests.
+    Download `.tmp` files older than TMP_MAX_AGE_S are deleted (their server was
+    killed mid-download); newer ones are downloads in progress and count towards
+    the cap but are left alone.
     """
     with _evict_lock:
-        entries = []
+        entries, in_progress = [], 0
+        now = time.time()
+        for p in _folder().glob("*.tmp"):
+            try:
+                stat = p.stat()
+            except OSError:
+                continue
+            if now - stat.st_mtime > TMP_MAX_AGE_S:
+                p.unlink(missing_ok=True)
+            else:
+                in_progress += stat.st_size
         for p in _folder().glob("*.fits"):
             try:
                 stat = p.stat()
             except OSError:
                 continue
             entries.append((stat.st_mtime, stat.st_size, p))
-        total = sum(size for _, size, _ in entries)
+        total = in_progress + sum(size for _, size, _ in entries)
         cap = cache_cap_bytes()
         for _, size, p in sorted(entries, key=lambda e: e[0]):
             if total <= cap:

@@ -155,7 +155,8 @@ instead of from AWS.
 |----------|---------|--------------|
 | `SPHEREX_BACKEND_URL` | `http://130.61.174.88:8000` | Set in `web/.env.local`. The backend the main app talks to. |
 | `SPHEREX_CACHE_DIR` | `.cache` | Where downloads, cut-outs and the exposure list are stored. |
-| `SPHEREX_EXPOSURE_CACHE_GB` | `20` | Size limit for downloaded exposure files. The least recently used are removed first. |
+| `SPHEREX_EXPOSURE_CACHE_GB` | `6` | Size limit for downloaded exposure files. The least recently used are removed first. |
+| `SPHEREX_RENDER_CACHE_GB` | `3` | Size limit for rendered frames and resampled grids. With the defaults and the exposure list, the cache folder stays under 10 GB. |
 | `SPHEREX_SOURCE` | `aws` | Set to `irsa` to fetch one small cut-out per patch from IRSA instead of whole files from AWS. |
 | `SPHEREX_INSECURE_TLS` | off | Set to `1` to turn off certificate checks. Only for sandboxes that intercept TLS; never in normal use. |
 

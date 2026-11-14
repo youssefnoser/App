@@ -64,7 +64,7 @@ This is the default path (`SPHEREX_SOURCE=aws`; `irsa` switches back to the two 
   900 MB on disk after trimming to IMAGE, FLAGS, ZODI, WCS-WAVE (50 MB each, FLAGS stored uncompressed).
 - **Same pixels.** For those 18 exposures, the crop cut locally and the IRSA cutout give identical values after resampling
   (largest difference 0). The local crop is wider (it allows for the detector's roll angle), so 2 to 5% more of each patch is filled.
-- **Cache.** `.cache/exposures/`, least recently used deleted above `SPHEREX_EXPOSURE_CACHE_GB` (default 20). Rendered PNGs are kept.
+- **Cache.** `.cache/exposures/`, least recently used deleted above `SPHEREX_EXPOSURE_CACHE_GB` (default 6). Rendered PNGs and grids are capped separately by `SPHEREX_RENDER_CACHE_GB` (default 3), so the whole cache stays under 10 GB.
 - **Exposure list.** `scripts/data/snapshot_metadata.py` copies `spherex.artifact` joined to `spherex.plane` into
   `.cache/meta/exposures.sqlite` through queued TAP jobs, one per 30 days of observation time. Re-run with `--refresh` after a data release.
 - **Exposure list without IRSA.** `scripts/data/snapshot_from_aws.py` lists `dr1/level2/` and `qr3/level2/` (1,179,406 + 448,824 files,
