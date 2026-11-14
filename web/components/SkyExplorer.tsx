@@ -6,6 +6,7 @@ import { cachedFetch } from '@/shared/frontend-cache.js';
 import type { BackendTimeline } from '@/shared/backend-sky.js';
 import BandSelector from './BandSelector';
 import { getBandWavelength } from '@/lib/spectral';
+import { resolveQuery } from '@/lib/resolve';
 import Rotor from './Rotor';
 import SkyCanvas, { type FovRequest } from './SkyCanvas';
 import ImageMath from './ImageMath';
@@ -145,6 +146,9 @@ export default function SkyExplorer() {
   const [sequenceWavelength, setSequenceWavelength] = useState<number | undefined>(1.25);
   const [sequenceWidth, setSequenceWidth] = useState(.05);
   const [gaiaEnabled, setGaiaEnabled] = useState(false);
+  // Name and type of an object found through Sesame or Gaia (not a built-in target).
+  const [lookup, setLookup] = useState<{ name: string; type: string } | null>(null);
+  const lookupTicket = useRef(0);
   const [wiseEnabled, setWiseEnabled] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [bandsOpen, setBandsOpen] = useState(false);
@@ -258,7 +262,7 @@ export default function SkyExplorer() {
     const normalize = (value: string) => value.toLowerCase().replace(/[’']/g, '').trim();
     const text = query.trim();
     if (!text) {
-      setMessage('Enter an object name or RA, Dec in degrees.');
+      setMessage('Enter an object name, a Gaia DR3 ID, or RA, Dec in degrees.');
       return;
     }
     const pair = text.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\u00b0?\s*(?:,\s*|\s+)([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\u00b0?$/);
@@ -269,6 +273,7 @@ export default function SkyExplorer() {
         return;
       }
       updateCoordinates(a, d);
+      setLookup(null);
       const matchIdx = targets.findIndex(item => Math.abs(item.ra - a) < .001 && Math.abs(item.dec - d) < .001);
       setSelected(matchIdx);
       saveHistoryItem({
@@ -285,10 +290,27 @@ export default function SkyExplorer() {
     }
     const index = targets.findIndex(target => normalize(target.name).includes(normalize(query)));
     if (index >= 0) {
+      setLookup(null);
       chooseTarget(index);
-    } else {
-      setMessage('Try Barnard’s Star, Epsilon Indi B, WISE 0855, RW Aurigae, or R Draconis.');
+      return;
     }
+    // Not a built-in target: ask Sesame (names) or our backend (Gaia DR3 ids).
+    const ticket = ++lookupTicket.current;
+    setMessage(`Looking up ${text}…`);
+    resolveQuery(text).then(result => {
+      if (ticket !== lookupTicket.current) return; // a newer search replaced this one
+      if (!result.ok) {
+        setMessage(result.message);
+        return;
+      }
+      setSelected(-1);
+      setLookup({ name: result.name, type: result.type });
+      updateCoordinates(result.ra, result.dec);
+      saveHistoryItem({ query: text, name: result.name, type: result.type, ra: result.ra, dec: result.dec });
+      setMessage(`Exploring ${result.name}`);
+      setQuery('');
+      setSearchOpen(false);
+    });
   }
   const target = targets[selected];
   const readout = viewCoordinates;
@@ -339,6 +361,7 @@ export default function SkyExplorer() {
                         (t) => Math.abs(t.ra - item.ra) < 0.001 && Math.abs(t.dec - item.dec) < 0.001
                       );
                       setSelected(idx);
+                      setLookup(idx < 0 && item.name ? { name: item.name, type: item.type ?? 'SIMBAD' } : null);
                       saveHistoryItem(item);
                       setQuery('');
                       setSearchOpen(false);
@@ -420,8 +443,8 @@ export default function SkyExplorer() {
         onStatus={setMessage}
         infrared={infrared}
         grid={grid}
-        name={target?.name ?? `${coordinates.ra.toFixed(4)}°, ${coordinates.dec >= 0 ? '+' : ''}${coordinates.dec.toFixed(4)}°`}
-        objectType={target?.type ?? 'CUSTOM COORDINATES'}
+        name={target?.name ?? lookup?.name ?? `${coordinates.ra.toFixed(4)}°, ${coordinates.dec >= 0 ? '+' : ''}${coordinates.dec.toFixed(4)}°`}
+        objectType={target?.type ?? lookup?.type ?? 'CUSTOM COORDINATES'}
         coordinates={coordinates}
         gaiaEnabled={gaiaEnabled}
         wiseEnabled={wiseEnabled}
