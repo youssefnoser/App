@@ -13,6 +13,9 @@ What is fetched for one crop:
   5. the last 5,760 bytes, which hold the WCS-WAVE lookup table.
 Where each part starts is the same every time for one file, so that layout is
 remembered in memory and later crops of the same file skip the header requests.
+Requests that do not depend on each other are sent together, and the places
+headers usually sit are asked for early, so a first crop costs about three round
+trips to the mirror instead of nine.
 
 `fetch_crop` returns the same thing as `mirror.cut`: an in-memory HDUList with
 IMAGE, FLAGS, ZODI (cropped, WCS shifted) and WCS-WAVE. NaN in the file stays NaN.
@@ -21,6 +24,7 @@ IMAGE, FLAGS, ZODI (cropped, WCS shifted) and WCS-WAVE. NaN in the file stays Na
 import io
 import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import httpx
@@ -114,19 +118,53 @@ def _data_bytes(header: fits.Header) -> int:
     return (size + BLOCK - 1) // BLOCK * BLOCK
 
 
+# Guesses that hold for every DR1 and QR3 file seen so far. They let the header
+# requests go out together instead of one after another; each is checked against
+# the real header and re-fetched if it turns out wrong.
+GUESS_FLAGS_AT = 25_920 + 2040 * 2040 * 4
+GUESS_FLAGS_BYTES = 17_280 + 2040 * 8
+GUESS_VARIANCE_HEADER = 11_520
+GUESS_HEADER_BYTES = 14_400
+_pool = ThreadPoolExecutor(max_workers=32, thread_name_prefix="ranges")
+
+
+def _later(fn, *args):
+    """Run a request on the shared pool. The tasks never submit work themselves."""
+    return _pool.submit(fn, *args)
+
+
+def _tail(http: httpx.Client, url: str) -> bytes:
+    try:
+        response = http.get(url, headers={"Range": f"bytes=-{TAIL_BYTES}"})
+        response.raise_for_status()
+        return response.content
+    except httpx.HTTPError as exc:
+        raise CutoutError(f"The mirror did not return part of the file: {exc!r}") from exc
+
+
 def _layout(http: httpx.Client, url: str) -> Layout:
     with _layouts_guard:
         known = _layouts.get(url)
     if known is not None:
         return known
     try:
-        head = _get(http, url, 0, HEAD_BYTES)
+        # Round 1, together: file head, the WCS-WAVE tail, and FLAGS where we expect it.
+        head_job = _later(_get, http, url, 0, HEAD_BYTES)
+        tail_job = _later(_tail, http, url)
+        flags_job = _later(_get, http, url, GUESS_FLAGS_AT, GUESS_FLAGS_AT + GUESS_FLAGS_BYTES)
+        head = head_job.result()
         primary, _, offset = _header_at(http, url, 0, head)
         image, _, image_data = _header_at(http, url, offset, head[offset:])
         if image.get("EXTNAME") != "IMAGE" or int(image["BITPIX"]) != -32:
             raise CutoutError("The archive file does not start with a float IMAGE extension.")
         offset = image_data + _data_bytes(image)
-        flags, flags_raw, flags_table = _header_at(http, url, offset)
+        guess = b""
+        if offset == GUESS_FLAGS_AT:
+            try:
+                guess = flags_job.result()
+            except CutoutError:
+                guess = b""
+        flags, flags_raw, flags_table = _header_at(http, url, offset, guess)
         if flags.get("EXTNAME") != "FLAGS" or not flags.get("ZIMAGE", False):
             raise CutoutError("FLAGS is not a compressed image as expected.")
         if int(flags.get("ZTILE1", flags["ZNAXIS1"])) != int(flags["ZNAXIS1"]) \
@@ -135,26 +173,33 @@ def _layout(http: httpx.Client, url: str) -> Layout:
         rows, width = int(flags["NAXIS2"]), int(flags["NAXIS1"])
         if width != 8:
             raise CutoutError("FLAGS row index has an unexpected layout.")
-        index = np.frombuffer(_get(http, url, flags_table, flags_table + rows * width),
-                              dtype=">i4").reshape(rows, 2).astype(np.int64)
+        have = guess[flags_table - offset:flags_table - offset + rows * width]
+        if len(have) != rows * width:
+            have = _get(http, url, flags_table, flags_table + rows * width)
+        index = np.frombuffer(have, dtype=">i4").reshape(rows, 2).astype(np.int64)
         flags_heap = flags_table + int(flags.get("THEAP", rows * width))
+        # Round 2, together: the next header (VARIANCE) and ZODI where we expect it.
         offset = flags_table + _data_bytes(flags)
-        name = ""
+        zodi_guess_at = offset + GUESS_VARIANCE_HEADER + 2040 * 2040 * 4
+        next_job = _later(_get, http, url, offset, offset + GUESS_HEADER_BYTES)
+        zodi_job = _later(_get, http, url, zodi_guess_at, zodi_guess_at + GUESS_HEADER_BYTES)
+        name, first = "", next_job.result()
         for _ in range(4):  # VARIANCE normally sits between FLAGS and ZODI
-            header, _, data = _header_at(http, url, offset)
+            header, _, data = _header_at(http, url, offset, first)
             name = header.get("EXTNAME", "")
             if name == "ZODI":
                 break
             offset = data + _data_bytes(header)
+            first = b""
+            if offset == zodi_guess_at:
+                try:
+                    first = zodi_job.result()
+                except CutoutError:
+                    first = b""
         if name != "ZODI" or int(header["BITPIX"]) != -32:
             raise CutoutError("The archive file has no float ZODI extension where expected.")
-        try:
-            tail = http.get(url, headers={"Range": f"bytes=-{TAIL_BYTES}"})
-            tail.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise CutoutError(f"The mirror did not return part of the file: {exc!r}") from exc
         stub = fits.PrimaryHDU().header.tostring().encode()
-        with fits.open(io.BytesIO(stub + tail.content)) as hdul:
+        with fits.open(io.BytesIO(stub + tail_job.result())) as hdul:
             table = hdul[1]
             if table.name != "WCS-WAVE":
                 raise CutoutError("The archive file does not end with the WCS-WAVE table.")
@@ -217,9 +262,12 @@ def fetch_crop(
         x, y = layout.sky.world_to_pixel_values(ra, dec)
     (x0, x1), (y0, y1) = _box(float(x), float(y), size_deg, (ny, nx))
     try:
+        # The three row requests go out together.
+        zodi_job = _later(_float_rows, http, url, layout.zodi_data, nx, y0, y1, x0, x1)
+        flags_job = _later(_flag_rows, http, url, layout, y0, y1, x0, x1)
         image = _float_rows(http, url, layout.image_data, nx, y0, y1, x0, x1)
-        zodi = _float_rows(http, url, layout.zodi_data, nx, y0, y1, x0, x1)
-        flags = _flag_rows(http, url, layout, y0, y1, x0, x1)
+        zodi = zodi_job.result()
+        flags = flags_job.result()
     except CutoutError:
         raise
     except Exception as exc:
