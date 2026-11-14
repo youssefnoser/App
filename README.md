@@ -1,115 +1,100 @@
 # SPHEREx Blink
 
-A web tool for the NASA Space Apps 2026 challenge
+Our entry for the NASA Space Apps 2026 challenge
 [Planet X and SPHEREx](https://www.spaceappschallenge.org/2026/challenges/planet-x-and-spherex/).
-Type a sky position, get a playable series of SPHEREx infrared images of that patch, and spot what moves.
 
-Status: working. The Python backend serves real SPHEREx frames; the Next.js app is the main interface; a plain
-test bench page is kept for debugging against real data.
+You type a position on the sky, and the tool plays the SPHEREx infrared images of that spot like a short video, so you
+can see what moves. Nearby stars, brown dwarfs, asteroids and comets all shift position between images taken months apart.
 
-## Why this exists
+SPHEREx photographs the whole sky every six months in 102 infrared bands, which is far too much data for any one person
+to search. This tool makes flipping through it quick enough that anyone can try.
 
-SPHEREx photographs the whole sky every six months in 102 infrared bands. Comets, asteroids, nearby stars and brown dwarfs
-reveal themselves by shifting between images, and there is too much data for any one person. This tool makes the flipping easy.
+## What it does
 
-## Run
+- Finds every SPHEREx exposure that covers the position you choose. You can type RA and Dec in degrees, or pick one of the preset object names.
+- Shows those exposures in time order, so you can play them, pause, or step through one frame at a time.
+- Lets you choose which wavelengths go into the sequence, because each SPHEREx exposure sees a slightly different colour.
+- Keeps the five challenge test targets one click away: Barnard's Star, Epsilon Indi B, WISE 0855, RW Aurigae and
+  R Draconis.
 
-First time? Do the [Setup](#setup) steps 1 to 4 once. Then:
+Barnard's Star is a good first check: it should move north, by about 10 arcseconds per year.
 
-### Run the backend locally
+## How it fits together
 
-From the repo root:
+```
+browser ── main app (web/, Next.js, :5173) ──┐
+        └─ test bench (testbench/, :8000) ───┤  /api
+                                             ▼
+                        backend (server/, Python + FastAPI, :8000)
+                                             │
+             SPHEREx files: AWS mirror (default) or the IRSA archive
+```
+
+The backend does all the astronomy. It finds the exposures, cuts out the patch, subtracts the zodiacal background
+(the glow of dust in the solar system) and turns the result north-up. The browser only displays and animates the frames.
+
+There are two pages:
+
+- **The main app**: the interface people use.
+- **The test bench**: a plain page the backend serves, for checking the data and debugging.
+
+## Quick start
+
+You need Git, Python 3.11 or newer with [uv](https://docs.astral.sh/uv/), and Node.js 22.14 or newer.
+
+```bash
+git clone --recurse-submodules <repo-url>
+cd <repo-folder>
+uv sync                                                      # backend dependencies
+(cd web && npm install)                                      # main app dependencies
+echo "SPHEREX_BACKEND_URL=http://127.0.0.1:8000" > web/.env.local
+```
+
+Then start two terminals:
+
+```bash
+uv run uvicorn server.app:app --reload --port 8000           # terminal 1: backend
+```
+
+```bash
+cd web && npm run dev                                        # terminal 2: main app
+```
+
+Open http://localhost:5173 and pick Barnard's Star.
+
+The first view of a spot takes a while. The backend downloads whole exposure files from the public SPHEREx mirror on AWS
+(no account needed) and caches them in `.cache/`. Later views of the same spot are quick.
+
+## Running each part
+
+### Backend
 
 ```bash
 uv run uvicorn server.app:app --reload --port 8000
 ```
 
-It is ready when it prints `Application startup complete`. Check it at http://localhost:8000/health.
-Stop it with Ctrl+C.
+Run this from the repo root. The backend is ready when it prints `Application startup complete`, and you can check it
+at http://localhost:8000/health. Stop it with Ctrl+C.
 
-### Run the frontend (main app)
-
-Needs a backend: your local one above (with `web/.env.local` set to `http://127.0.0.1:8000`, Setup step 4) or the
-team's hosted one. In a second terminal:
+### Main app
 
 ```bash
 cd web
-npm run dev
+npm run dev                  # development, reloads on save
+npm run build && npm start   # production build
 ```
 
-Open http://localhost:5173.
+Both serve at http://localhost:5173. The app sends its `/api` requests to the backend named in `web/.env.local`:
 
-For a production build instead: `npm run build && npm start` (same port).
+- Your own backend: `SPHEREX_BACKEND_URL=http://127.0.0.1:8000`
+- The team's hosted backend: `cp web/.env.example web/.env.local`. You then don't need to run a backend yourself.
 
-### Run the test UI (test bench)
+### Test bench
 
-The test bench is served by the backend itself, so there is nothing extra to start: run the backend above and open
-http://localhost:8000.
+There's nothing extra to start: with the backend running, open http://localhost:8000.
 
-It needs the sky engine built once ([Setup](#setup) step 6). Without it the page opens but the sky view does not load.
-
-### Run the tests
-
-```bash
-uv run pytest -q          # backend, offline
-cd web && npm test        # frontend: shared modules and unit tests
-cd web && npm run check   # TypeScript type-check
-```
-
-## Setup
-
-### What you need
-
-- Git
-- Python 3.11 or newer, and [uv](https://docs.astral.sh/uv/)
-- Node.js 22.14 or newer, with npm
-- Only for the test bench: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and
-  [SCons](https://scons.org/), to build the sky engine (step 6)
-
-### 1. Get the code
-
-```bash
-git clone --recurse-submodules <repo-url>
-cd <repo-folder>
-```
-
-If you already cloned without `--recurse-submodules`, run `git submodule update --init`. The submodule is our fork of
-Stellarium Web Engine in `vendor/`.
-
-### 2. Install the backend
-
-```bash
-uv sync
-```
-
-### 3. Install the main app
-
-```bash
-cd web
-npm install
-```
-
-### 4. Point the main app at a backend
-
-The main app passes its `/api` requests through to the backend named in `web/.env.local`. To use your own backend
-from step 5:
-
-```bash
-echo "SPHEREX_BACKEND_URL=http://127.0.0.1:8000" > web/.env.local
-```
-
-To use the team's hosted backend instead, run `cp web/.env.example web/.env.local` and skip starting your own.
-
-### 5. Run it
-
-See [Run](#run). The first view of a patch is slow: the backend downloads whole exposure files from the SPHEREx
-mirror on AWS (no account needed), cuts them, and caches the results under `.cache/`. Later views of the same patch
-are quick.
-
-### 6. Optional: build the sky engine for the test bench
-
-The main app ships a prebuilt engine in `web/public/stellarium/`, but the test bench at http://localhost:8000 needs
-the fork in `vendor/` built:
+The test bench draws the sky with our fork of Stellarium Web Engine in `vendor/`, which has to be built once. The
+build needs [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and [SCons](https://scons.org/):
 
 ```bash
 source <path-to-emsdk>/emsdk_env.sh
@@ -117,67 +102,77 @@ cd vendor/stellarium-web-engine
 make js
 ```
 
-The output goes to `vendor/stellarium-web-engine/build/`. Restart the backend afterwards so it serves `/engine`.
+Then restart the backend. Without this build the page opens, but the sky view doesn't load. The main app doesn't
+need this build, because it ships its own copy in `web/public/stellarium/`.
 
-### 7. Optional: a local list of exposures
+### Tests
 
-Without a local list, the backend asks the IRSA archive which exposures cover a patch, which can take several seconds
-or time out when IRSA is busy. Building the list once makes that lookup instant:
+```bash
+uv run pytest -q             # backend; offline, uses tests/fixtures/
+cd web && npm test           # frontend: shared modules and unit tests
+cd web && npm run check      # TypeScript type-check
+```
+
+The frontend unit tests are TypeScript run directly by Node. Some Linux distribution builds of Node can't do that. If
+the tests fail with `ERR_NO_TYPESCRIPT`, install Node from nodejs.org or with nvm.
+
+## Optional: a local list of exposures
+
+When the backend has no local list of exposures, it asks the IRSA archive which exposures cover a spot. That can take
+several seconds, or time out when IRSA is busy. Building a local list once makes the lookup instant:
 
 ```bash
 uv run python scripts/data/snapshot_from_aws.py --targets   # quick: only the five challenge targets
 uv run python scripts/data/snapshot_from_aws.py             # whole sky: reads about 1.6 million file headers
 ```
 
-It is saved to `.cache/meta/exposures.sqlite` and can be resumed if interrupted. `scripts/data/snapshot_metadata.py`
-builds the same list from IRSA instead. After a new data release, re-run the script.
+The list is saved to `.cache/meta/exposures.sqlite`, and the script picks up where it left off if it's interrupted.
+Re-run it after each new SPHEREx data release. `scripts/data/snapshot_metadata.py` builds the same list from IRSA
+instead of from AWS.
 
-### Settings
+## Settings
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
-| `SPHEREX_CACHE_DIR` | `.cache` | Where downloads, crops and the exposure list are stored |
-| `SPHEREX_EXPOSURE_CACHE_GB` | `20` | Size cap for downloaded exposure files; the least recently used are removed first |
-| `SPHEREX_SOURCE` | `aws` | `irsa` fetches one cutout per patch from IRSA instead of whole files from AWS |
-| `SPHEREX_BACKEND_URL` | team backend (`web/.env.example`) | Set in `web/.env.local`: the backend the main app talks to |
-| `SPHEREX_INSECURE_TLS` | off | `1` turns off certificate checks. Only for sandboxes that intercept TLS; never in normal use |
+| `SPHEREX_BACKEND_URL` | team backend | Set in `web/.env.local`. The backend the main app talks to. |
+| `SPHEREX_CACHE_DIR` | `.cache` | Where downloads, cut-outs and the exposure list are stored. |
+| `SPHEREX_EXPOSURE_CACHE_GB` | `20` | Size limit for downloaded exposure files. The least recently used are removed first. |
+| `SPHEREX_SOURCE` | `aws` | Set to `irsa` to fetch one small cut-out per patch from IRSA instead of whole files from AWS. |
+| `SPHEREX_INSECURE_TLS` | off | Set to `1` to turn off certificate checks. Only for sandboxes that intercept TLS; never in normal use. |
 
-### Tests
-
-The commands are under [Run the tests](#run-the-tests). The frontend unit tests are TypeScript run directly by Node,
-which needs a Node build with type stripping (`node --experimental-strip-types`). Some Linux distribution packages
-leave it out; if they fail with `ERR_NO_TYPESCRIPT`, install Node from nodejs.org or with nvm.
-
-## Layout
+## Project layout
 
 | Path | What it is |
 |------|------------|
-| `server/` | FastAPI backend: finds exposures, cuts and renders frames (Python) |
-| `tests/` | Server tests, offline, with fixtures |
-| `web/` | Main app (Next.js). `web/shared/` holds modules the test bench also uses; `web/tests/` all frontend tests |
-| `testbench/` | Plain debugging page served by the backend at `/` |
-| `scripts/data/` | Python tools that fill the exposure snapshot and warm caches (use the network) |
+| `server/` | Backend (Python, FastAPI): finds exposures, cuts and renders frames |
+| `tests/` | Backend tests, offline, with fixtures |
+| `web/` | Main app (Next.js) |
+| `web/shared/` | Plain JavaScript modules used by both the main app and the test bench |
+| `web/tests/` | All frontend tests: `shared/`, `unit/`, `browser/` (Playwright) |
+| `testbench/` | The test bench page, served by the backend at `/` |
+| `scripts/data/` | Python tools that build the exposure list and warm the caches (use the network) |
 | `scripts/checks/` | Browser checks against a running app (use the network) |
 | `docs/` | Spec, data notes, architecture, design ideas, the challenge brief |
-| `archive/` | Earlier prototype and spike, kept for reference |
-| `vendor/` | Stellarium Web Engine (git submodule) |
+| `archive/` | The first prototype and the Stellarium spike, kept for reference |
+| `vendor/` | Our Stellarium Web Engine fork (git submodule) |
 
-## Docs
+## Further reading
 
-| File | Purpose |
-|------|---------|
-| `AGENTS.md` | Rules and commands for coding agents. Start here. |
-| `docs/SPEC.md` | What the challenge requires, test targets, optional extras |
-| `docs/challenge/brief.md`, `docs/challenge/features.md` | The challenge text and the feature list drawn from it |
-| `docs/DATA.md` | How to get SPHEREx data from IRSA, file layout, known gotchas |
-| `docs/ARCHITECTURE.md` | Components, HTTP API, URL schema, file map |
-| `docs/FRONTEND.md` | Change notes for the Next.js app |
-| `docs/DISPLAY-IDEAS.md` | Ideas for new ways to display the images, awaiting a decision |
-| `docs/superpowers/` | Design specs and task-by-task plans (history) |
-| `docs/reference/README.md` | Index of the SPHEREx Explanatory Supplement (PDF, gitignored) and the IRSA data root |
-| `docs/anatomy-of-a-spherex-file.png` | One real SPHEREx file opened up |
+| File | What's in it |
+|------|--------------|
+| `AGENTS.md` | Rules and commands for anyone (or any coding agent) changing the code. Read it before you start. |
+| `docs/SPEC.md` | What the challenge requires, the five test targets, optional extras |
+| `docs/challenge/` | The challenge text and the feature list we drew from it |
+| `docs/DATA.md` | How SPHEREx data is fetched and what goes wrong |
+| `docs/ARCHITECTURE.md` | Components, HTTP API, URL format, a map of every file |
+| `docs/FRONTEND.md` | Change notes for the main app |
+| `docs/DISPLAY-IDEAS.md` | Proposed new ways to display the images |
+| `docs/reference/README.md` | Index of the SPHEREx Explanatory Supplement, the mission's data handbook |
 
-## Inspiration
+## Credits
 
-[WiseView](http://byw.tools/wiseview) does this for the older WISE mission. SPHEREx differs: every exposure is nearly one colour,
-and each is a different colour, so one patch of sky is seen across both time and wavelength.
+- SPHEREx data: NASA, Caltech/JPL, distributed by [NASA/IPAC IRSA](https://irsa.ipac.caltech.edu/Missions/spherex.html).
+- Sky display: [Stellarium Web Engine](https://github.com/Stellarium/stellarium-web-engine) (AGPL-3.0).
+- Inspired by [WiseView](http://byw.tools/wiseview), which does the same for the WISE mission. SPHEREx is different:
+  each exposure covers a narrow slice of wavelengths, and each one a different slice, so one patch of sky is seen across
+  both time and wavelength.
