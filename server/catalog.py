@@ -2,7 +2,7 @@
 
 One SQLite file under cache_dir()/meta/exposures.sqlite holds every exposure's
 path, time, detector, obs id and footprint corners, filled by
-`scripts/snapshot_metadata.py`. A lookup keeps the footprint centres in memory
+`scripts/data/snapshot_metadata.py`. A lookup keeps the footprint centres in memory
 as unit vectors, picks the exposures whose centre is within their own radius of
 the point, then runs the exact footprint test (`patches.footprint_contains`), the
 same rule the view route uses. NaN never appears here: rows hold no pixels.

@@ -65,9 +65,9 @@ This is the default path (`SPHEREX_SOURCE=aws`; `irsa` switches back to the two 
 - **Same pixels.** For those 18 exposures, the crop cut locally and the IRSA cutout give identical values after resampling
   (largest difference 0). The local crop is wider (it allows for the detector's roll angle), so 2 to 5% more of each patch is filled.
 - **Cache.** `.cache/exposures/`, least recently used deleted above `SPHEREX_EXPOSURE_CACHE_GB` (default 20). Rendered PNGs are kept.
-- **Exposure list.** `scripts/snapshot_metadata.py` copies `spherex.artifact` joined to `spherex.plane` into
+- **Exposure list.** `scripts/data/snapshot_metadata.py` copies `spherex.artifact` joined to `spherex.plane` into
   `.cache/meta/exposures.sqlite` through queued TAP jobs, one per 30 days of observation time. Re-run with `--refresh` after a data release.
-- **Exposure list without IRSA.** `scripts/snapshot_from_aws.py` lists `dr1/level2/` and `qr3/level2/` (1,179,406 + 448,824 files,
+- **Exposure list without IRSA.** `scripts/data/snapshot_from_aws.py` lists `dr1/level2/` and `qr3/level2/` (1,179,406 + 448,824 files,
   counted 2026-11-13; `qr2/` has 1,367,330 but is superseded: "DR1 and QR3 together supersede QR2", IRSA data-access guide) and reads
   the first 28,800 bytes of each file. The IMAGE header gives `MJD-BEG` (equal to TAP's `time_bounds_lower`), `DETECTOR`, `OBSID` and
   the WCS (TAN + SIP order 3), from which the four detector corners are computed. Checked on one file: corners within one pixel of
@@ -178,7 +178,7 @@ Exposure counts for Barnard's Star (measured): 60/60/59/59/60/58 for D1 to D6 (3
 - **Each image is almost one colour** (LVF). Measured across a 29 pixel crop at 4.55 um: 4.547 to 4.556 um.
   Across all exposures of one spot: 0.74 to 5.0 um.
 - **Frames are rotated.** Every exposure has a different sky orientation. Reproject onto a shared north-up, east-left grid before blinking.
-  Prototype: `prototype/process.py` (3.075 arcsec/px, 41 x 41, bilinear).
+  Prototype: `archive/prototype/process.py` (3.075 arcsec/px, 41 x 41, bilinear).
 - **Moving targets need epoch-corrected positions.** Barnard's Star J2000 coordinates are about 4.5 arcmin from where it is in 2026.
   Propagate with proper motion (astropy `SkyCoord.apply_space_motion`) before querying.
   The user-typed position is a snapshot of a fixed patch of sky, not a tracked object.
@@ -205,7 +205,7 @@ there (`curl -k`, `requests verify=False`). Production code must verify TLS. The
 
 ## Target coordinates (verified 2026-11-13)
 
-Resolved by `scripts/resolve_targets.py`, which reads SIMBAD's ICRS J2000 position and proper motion and then cross-checks the nearest Gaia
+Resolved by `scripts/data/resolve_targets.py`, which reads SIMBAD's ICRS J2000 position and proper motion and then cross-checks the nearest Gaia
 DR3 source at the propagated 2016 position. `server/targets.py` holds the values.
 
 | Target | ICRS J2000 | pmra, pmdec (mas/yr) | Check |
@@ -223,6 +223,6 @@ DR3 source at the propagated 2016 position. `server/targets.py` holds the values
 ## Still unverified
 
 - Whether SPHEREx DR1 *covers* Epsilon Indi B, RW Aurigae and R Draconis, and with how many visits. The exposure index had to come from IRSA
-  TAP, which was queueing every job on 2026-11-13 evening (sync requests timed out, async jobs sat in QUEUED); `scripts/check_targets.py`
+  TAP, which was queueing every job on 2026-11-13 evening (sync requests timed out, async jobs sat in QUEUED); `scripts/data/check_targets.py`
   answers it once the service recovers.
 - Whether cutout size limits exist on the IRSA service for sizes above 0.1 degrees. Untested.

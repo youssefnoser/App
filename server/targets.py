@@ -1,6 +1,6 @@
 """The five challenge test targets, ICRS J2000 with proper motion.
 
-Values from SIMBAD (ICRS, epoch J2000) as reported by `scripts/resolve_targets.py`
+Values from SIMBAD (ICRS, epoch J2000) as reported by `scripts/data/resolve_targets.py`
 on 2026-11-13, which also cross-checks each one against Gaia DR3 (see the
 `verified` field: four match a Gaia DR3 source within 0.2 arcsec with proper
 motion agreeing to 4.3 mas/yr; WISE 0855 is far too faint for Gaia).

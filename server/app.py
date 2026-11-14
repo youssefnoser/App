@@ -255,7 +255,7 @@ def _render_frame(pix: int, uri: str) -> tuple[bytes, dict]:
 def render_frame_cached(pix: int, uri: str) -> tuple[bytes, dict]:
     """PNG bytes and metadata for one patch and one exposure, from disk when warm.
 
-    Shared by the HTTP route and `scripts/prewarm.py`, so a prewarmed frame is
+    Shared by the HTTP route and `scripts/data/prewarm.py`, so a prewarmed frame is
     byte-identical to one fetched by the browser.
     """
     png_path, meta_path = _frame_paths(pix, uri)

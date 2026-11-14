@@ -1,7 +1,7 @@
 # Architecture
 
 ```
-browser (web/, vanilla ES modules, no build step)
+browser: web/ (Next.js main app, :5173, proxies /api) or testbench/ (vanilla page served by the server at :8000)
    │  GET /api/exposures?ra&dec           list of exposures covering the patch (~4 s)
    │  GET /api/frame?uri&ra&dec&fov       one reprojected frame, requested in parallel, shown as it arrives
    ▼
@@ -66,35 +66,40 @@ Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6
 | `server/cutouts.py` | `fetch_cutout()` |
 | `server/mirror.py` | `fetch_exposure()` (whole file from the AWS mirror, trimmed, LRU cache with a size cap), `cut()` (local crop), `prefetch()` |
 | `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()` |
-| `scripts/snapshot_metadata.py` | fill the snapshot from IRSA TAP in time windows, resumable (network) |
+| `scripts/data/snapshot_metadata.py` | fill the snapshot from IRSA TAP in time windows, resumable (network) |
 | `server/footprint.py` | `exposure_from_head()`: time, detector, obs id and footprint from a file's first 28,800 bytes (hand-parsed TAN + SIP) |
-| `scripts/snapshot_from_aws.py` | fill the snapshot from the AWS mirror alone: list the bucket, read each file's header, resumable (network) |
+| `scripts/data/snapshot_from_aws.py` | fill the snapshot from the AWS mirror alone: list the bucket, read each file's header, resumable (network) |
 | `server/pixels.py` | `science_image()` (IMAGE minus ZODI, saturation-aware masking), `masked_pixels()`, `BAD_PIXEL_MASK`, `HARD_PIXEL_MASK` |
 | `server/reproject.py` | `resample_north_up()` (NaN-aware north-up resampling), `wavelength_at()` |
 | `server/app.py` | routes, `render_frame_cached()`, `RENDER_VERSION` in the PNG cache path |
-| `scripts/resolve_targets.py` | one-off: SIMBAD positions and proper motions, cross-checked against Gaia DR3 |
-| `scripts/check_targets.py` | exposure counts per challenge target (network) |
-| `scripts/prewarm.py` | warm every frame the browser would request, and report the cost (network on a cold cache) |
-| `scripts/compare_masks.py` | archive-mask versus page-mask contact sheet, for judging a render change |
-| `web/index.html`, `web/css/app.css` | page shell |
-| `web/js/state.js` | hash parse/serialise |
-| `web/js/stretch.js` | pixel to colour |
-| `web/js/windows.js` | time-window grouping and stacking |
-| `web/js/loader.js` | progressive frame loading |
-| `web/js/app.js` | wiring, blink player |
-| `tests/` | pytest (server), `web/test/` node:test (frontend); `tests/test_targets.py` covers the five targets |
-| `prototype/` | throwaway scripts that proved the pipeline. Read, copy ideas, do not import. |
+| `scripts/data/resolve_targets.py` | one-off: SIMBAD positions and proper motions, cross-checked against Gaia DR3 |
+| `scripts/data/check_targets.py` | exposure counts per challenge target (network) |
+| `scripts/data/prewarm.py` | warm every frame the browser would request, and report the cost (network on a cold cache) |
+| `scripts/data/compare_masks.py` | archive-mask versus page-mask contact sheet, for judging a render change |
+| `scripts/checks/*.mjs` | browser checks against a running app (network): `acceptance.mjs`, `check_band_cache.mjs`, `check_next_backend.mjs` |
+| `testbench/index.html`, `testbench/app.css` | test bench page shell, served at `/` by `server/app.py` |
+| `testbench/app.js` | test bench wiring, blink player |
+| `testbench/sky.js` | test bench Stellarium engine setup |
+| `web/shared/state.js` | hash parse/serialise |
+| `web/shared/viewbox.js` | which frames cover the view |
+| `web/shared/queue.js` | progressive frame loading (`Loader`, `priorityList`) |
+| `web/shared/timeline.js` | visit steps for the blink |
+| `web/shared/photos.js` | `PhotoCache` |
+| `tests/` | pytest (server); `tests/test_targets.py` covers the five targets |
+| `web/tests/shared/` | node:test for `web/shared/` |
+| `web/tests/unit/`, `web/tests/browser/` | Next.js unit tests and Playwright |
+| `archive/` | throwaway work (`prototype/`, `spike/`). Read, copy ideas, do not import. |
 
 ## Next.js canvas integration
 
 The existing Next.js UI (`web/components/SkyExplorer.tsx`) controls the same
 Stellarium canvas via `SkyCanvas.tsx`. Its layout, drawers, overlays and control
-components remain in place. `web/index.html` and its runtime remain independent.
+components remain in place. The test bench (`testbench/`) is a separate page; the server serves it at `/` and `web/shared/` at `/shared`.
 
 | Path | Responsibility |
 |------|----------------|
-| `web/js/backend-sky.js` | React adapter reusing the legacy `Loader`, `PhotoCache`, timeline and hash format; sequence queries, progressive PNG loading, rolling medians, cancellation and north-up calibration |
-| `web/js/backend-sky.d.ts` | Typed adapter interface for React |
+| `web/shared/backend-sky.js` | React adapter reusing the legacy `Loader`, `PhotoCache`, timeline and hash format; sequence queries, progressive PNG loading, rolling medians, cancellation and north-up calibration |
+| `web/shared/backend-sky.d.ts` | Typed adapter interface for React |
 | `web/lib/backend-bands.ts` | Map the existing selected bands into backend wavelength windows or detector queries |
 | `web/app/api/[...path]/route.ts` | Same-origin streaming proxy for the backend's target, view, patch, sequence and frame endpoints; preserves `X-Frame-Meta` |
 
@@ -111,14 +116,14 @@ not been replaced with invented backend endpoints or PNG-derived science values.
 
 ### Frontend request caching and band sidebar
 
-`web/js/frontend-cache.js` shares identical in-flight requests and caches successful
+`web/shared/frontend-cache.js` shares identical in-flight requests and caches successful
 responses, including `X-Frame-Meta`. Memory and browser Cache Storage each have
 64 MiB / 512-entry limits. PNGs expire after 24 hours, sequences after five minutes,
 and targets after one hour. Cache Storage keeps responses across reloads where
 supported; storage failures fall back to the bounded memory cache. Failed and
 aborted requests are not cached.
 
-`web/js/frame-assets.js` keeps up to 256 image blobs within 64 MiB. The engine uses
+`web/shared/frame-assets.js` keeps up to 256 image blobs within 64 MiB. The engine uses
 these Blob URLs instead of downloading each PNG again. Eviction removes the
 associated photo and revokes its URL; canvas disposal releases the remaining URLs.
 
@@ -129,9 +134,9 @@ use one query each. Rapid selection changes wait 300 ms before loading. This kee
 the existing frontend's wavelength mapping, rather than claiming a new calibrated
 102-channel axis.
 
-Offline checks: `node --test "web/test/*.test.js"` from the project root and
-`node --experimental-strip-types tests/backend.test.ts` from `web/`. Manual live
-verification: `node scripts/check_band_cache.mjs` with Next.js at localhost:5173;
+Offline checks: `npm test` from `web/` (runs `tests/shared/` and `tests/unit/`;
+the TS unit tests need a Node build with TypeScript stripping). Manual live
+verification: `node scripts/checks/check_band_cache.mjs` with Next.js at localhost:5173;
 `NEXT_CHECK_URL` overrides that address. The script checks cold/reload request
 counts, detector selections, Advanced sync, last-band protection and sidebar bounds.
 

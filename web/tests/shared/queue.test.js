@@ -1,4 +1,4 @@
-// Tests for the browser load queue (web/js/queue.js). No network, no browser:
+// Tests for the browser load queue (web/shared/queue.js). No network, no browser:
 // the /api/view JSON shape is faked exactly as server/app.py returns it.
 
 import test from 'node:test';
