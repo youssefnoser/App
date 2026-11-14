@@ -110,9 +110,11 @@ query parameters and readout. The observer's clock stays fixed while playback
 switches actual images; changing observer time would move the catalogue pointing.
 
 The supplied backend exposes rendered PNGs and frame metadata. It does not expose
-raw science arrays, spectra, or Gaia/WISE catalog queries. The existing advanced
-frontend implementations and sample JSON route are retained; these tools have
-not been replaced with invented backend endpoints or PNG-derived science values.
+raw science arrays, spectra, or Gaia/WISE catalog queries. The sample JSON route
+(`/api/observations`, used by Image math) is retained; it has not been replaced
+with invented backend endpoints or PNG-derived science values. The unused
+spectral viewer, metadata panel and catalog overlay components were removed
+(2026-11-14); they are in git history if those features return.
 
 ### Frontend request caching and band sidebar
 
