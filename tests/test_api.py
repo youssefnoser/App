@@ -414,3 +414,108 @@ def test_stack_frame_with_no_covering_exposure_is_502(aws_client, monkeypatch):
     monkeypatch.setattr(app_module, "_exposures_for_cell", lambda cell: [])
     r = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}&stack={CELL}")
     assert r.status_code == 502
+
+
+# --- live sequence: one image per exposure, read by byte ranges ---
+
+
+def seq_setup(monkeypatch, tmp_path, count=5):
+    """`count` copies of the fixture as detector-6 exposures a day apart around Barnard."""
+    from astropy.io import fits
+
+    from server.irsa import Exposure
+
+    src = FIXTURES / "crop_barnard_D6_2026-03-19.fits"
+    square = ((269.0, 4.0), (270.0, 4.0), (270.0, 5.5), (269.0, 5.5))
+    members = [Exposure(f"ibe/data/spherex/s{i}.fits", 61000.0 + i, 6, "o", square)
+               for i in range(count)]
+    members.append(Exposure("ibe/data/spherex/far.fits", 61200.0, 6, "o", square))  # second visit
+    members.append(Exposure("ibe/data/spherex/d2.fits", 61001.5, 2, "o", square))   # other detector
+    monkeypatch.setattr(app_module, "_exposures_for_cell", lambda cell: members)
+    asked = []
+
+    def crop(uri, ra, dec, size):
+        asked.append(uri)
+        return fits.open(src)
+
+    monkeypatch.setattr(app_module, "fetch_crop", crop)
+    app_module._grids.clear()
+    return members, asked
+
+
+SEQ = "ra=269.4463&dec=4.7677&fov=0.05"
+
+
+def test_sequence_lists_one_detector_in_time_order(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+    body = aws_client.get(f"/api/sequence?{SEQ}&detector=6").json()
+    uris = [e["uri"].rsplit("/", 1)[1] for e in body["exposures"]]
+    assert uris == ["s0.fits", "s1.fits", "s2.fits", "s3.fits", "s4.fits", "far.fits"]
+    assert [e["visit"] for e in body["exposures"]] == [0, 0, 0, 0, 0, 1]
+    # first, middle and last of each visit load first
+    assert [e["first"] for e in body["exposures"]] == [True, False, True, False, True, True]
+    pix = body["cell"]
+    assert pix < 0  # never a real HEALPix patch
+    assert body["cells"] == [{"pix": pix, "ra": 269.4463, "dec": 4.7677, "ring": 0}]
+    assert all(e["cells"] == [pix] for e in body["exposures"])
+    other = aws_client.get("/api/sequence?ra=269.5&dec=4.7677&fov=0.05&detector=6").json()
+    assert other["cell"] != pix  # a different box gets a different patch number
+    assert body["sequence"]["pixels"] == 59  # 0.05 deg at 3.075 arcsec
+
+
+def test_sequence_frame_single_and_rolling(aws_client, monkeypatch, tmp_path):
+    _, asked = seq_setup(monkeypatch, tmp_path)
+    url = f"/api/frame.png?uri=ibe/data/spherex/s2.fits&{SEQ}"
+    single = aws_client.get(url + "&roll=0")
+    assert single.status_code == 200
+    assert asked == ["ibe/data/spherex/s2.fits"]
+    assert "stack" not in json.loads(single.headers["x-frame-meta"])
+
+    rolled = aws_client.get(url + "&roll=1")
+    meta = json.loads(rolled.headers["x-frame-meta"])
+    assert meta["stack"] == 3 and meta["detector"] == 6
+    # the centre exposure was kept in memory: only its two neighbours are fetched
+    assert sorted(asked[1:]) == ["ibe/data/spherex/s1.fits", "ibe/data/spherex/s3.fits"]
+    # identical inputs: the median equals the single frame
+    assert rolled.content == single.content
+
+
+def test_rolling_median_does_not_cross_visits(aws_client, monkeypatch, tmp_path):
+    _, asked = seq_setup(monkeypatch, tmp_path)
+    r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/far.fits&{SEQ}&roll=2")
+    assert json.loads(r.headers["x-frame-meta"])["stack"] == 1
+    assert asked == ["ibe/data/spherex/far.fits"]
+
+
+def test_sequence_frame_is_served_from_disk_the_second_time(aws_client, monkeypatch, tmp_path):
+    _, asked = seq_setup(monkeypatch, tmp_path)
+    url = f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{SEQ}&roll=0"
+    first = aws_client.get(url)
+    app_module._grids.clear()
+    again = aws_client.get(url)
+    assert again.content == first.content
+    assert len(asked) == 1
+
+
+def test_sequence_frame_failure_is_502(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+
+    def broken(*args):
+        raise CutoutError("nope")
+
+    monkeypatch.setattr(app_module, "fetch_crop", broken)
+    r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{SEQ}")
+    assert r.status_code == 502
+
+
+@pytest.mark.parametrize("query", ["fov=0.9", "fov=0.01", "detector=7", "roll=9"])
+def test_sequence_rejects_out_of_range(aws_client, monkeypatch, tmp_path, query):
+    seq_setup(monkeypatch, tmp_path)
+    base = "ra=269.4463&dec=4.7677"
+    if query.startswith("roll"):
+        r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{base}&fov=0.05&{query}")
+    elif query.startswith("detector"):
+        r = aws_client.get(f"/api/sequence?{base}&fov=0.05&{query}")
+    else:
+        r = aws_client.get(f"/api/sequence?{base}&detector=6&{query}")
+    assert r.status_code == 422
