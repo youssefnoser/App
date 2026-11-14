@@ -83,8 +83,11 @@ def pixel_source() -> str:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict:
+    """Backend is up, plus how fresh the local exposure list is: `snapshot.complete`,
+    `snapshot.through_mjd` (filled up to this date, MJD) and `snapshot.exposures`.
+    When the snapshot is missing or incomplete, exposure lists come from IRSA."""
+    return {"status": "ok", "snapshot": catalog().status()}
 
 
 @app.get("/api/targets")
@@ -199,7 +202,10 @@ def view(
             **({"stack": cell, "count": len(members)} if stack else {}),
             "uri": e.uri,
             "obs_id": e.obs_id,
+            # mjd is the exposure start (TAP time_bounds_lower); the frame
+            # headers carry the average too (X-Frame-Meta mjd vs mjd_start).
             "mjd": e.mjd,
+            "mjd_start": e.mjd,
             "date": Time(e.mjd, format="mjd").iso[:10],
             "detector": e.detector,
             "visit": visit_of[e.uri],
@@ -263,7 +269,10 @@ def _render_frame(pix: int, uri: str) -> tuple[bytes, dict]:
                 grid = resample_north_up(image, WCS(header), ra, dec, PATCH_N)
                 wavelength_um, _ = wavelength_at(hdul, ra, dec)
             meta = {
+                # mjd is the average (MJD-AVG); the blink order uses the start.
                 "mjd": float(header["MJD-AVG"]),
+                "mjd_start": float(header["MJD-BEG"]),
+                "mjd_end": float(header["MJD-END"]),
                 "detector": int(header["DETECTOR"]),
                 "wavelength_um": wavelength_um,
                 "obs_id": str(header["OBSID"]),
@@ -289,6 +298,15 @@ def render_frame_cached(pix: int, uri: str) -> tuple[bytes, dict]:
     _write_atomic(meta_path, json.dumps(meta).encode())
     _write_atomic(png_path, png)
     return png, meta
+
+
+def _stack_source_ok(cell: int, uri: str) -> bool:
+    """True when `uri` is listed for `cell`, i.e. `cell` is the centre cell of a
+    view the caller actually got this stack uri from. Anything else is a caller
+    mistake (mixing responses), not an archive failure, so it is a 422, not 502.
+    A cell with no list at all is left to the renderer, which reports 502."""
+    exposures = _exposures_for_cell(cell)
+    return not exposures or any(e.uri == uri for e in exposures)
 
 
 def _stack_members(cell: int, uri: str) -> list[Exposure]:
@@ -333,8 +351,8 @@ def _render_stack(pix: int, uri: str, cell: int) -> tuple[bytes, dict]:
     times = sorted(d[2]["mjd"] for d in done)
     meta = {
         "mjd": float(np.median(times)),
-        "mjd_first": times[0],
-        "mjd_last": times[-1],
+        "mjd_start": times[0],
+        "mjd_end": times[-1],
         "detector": done[0][2]["detector"],
         "wavelength_um": float(np.median([d[1] for d in done])),
         "obs_id": "",
@@ -366,6 +384,12 @@ def patch_frame(
         check_uri(uri)
     except ValueError as err:
         raise HTTPException(422, "That is not a SPHEREx file path.") from err
+    if stack is not None and not _stack_source_ok(stack, uri):
+        # stack is the view's centre cell, so a uri unknown there means the
+        # caller mixed a stack uri with a view it did not come from.
+        raise HTTPException(
+            422, f"The stack parameter must be the centre cell of the view that "
+                 f"listed this exposure; this exposure is not part of cell {stack}.")
 
     try:
         if stack is None:
@@ -446,7 +470,10 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
                 grid = resample_north_up(
                     science_image(hdul), WCS(header), ra, dec, _seq_size(fov))
                 wavelength_um, _ = wavelength_at(hdul, ra, dec)
-                meta = {"mjd": float(header["MJD-AVG"]), "detector": int(header["DETECTOR"]),
+                meta = {"mjd": float(header["MJD-AVG"]),
+                        "mjd_start": float(header["MJD-BEG"]),
+                        "mjd_end": float(header["MJD-END"]),
+                        "detector": int(header["DETECTOR"]),
                         "obs_id": str(header["OBSID"])}
             out = (grid, wavelength_um, meta)
             buffer = io.BytesIO()
@@ -523,6 +550,9 @@ def sequence(
         "cells": [{"pix": pix, "ra": ra, "dec": dec, "ring": 0}],
         "exposures": [
             {"uri": e.uri, "obs_id": e.obs_id, "mjd": e.mjd,
+             # mjd is the exposure start (TAP time_bounds_lower), named here too
+             # so it cannot be read as the frame header's MJD-AVG.
+             "mjd_start": e.mjd,
              "date": Time(e.mjd, format="mjd").iso[:10], "detector": e.detector,
              "visit": visit, "first": e.uri in coarse, "cells": [pix],
              **({} if seen is None else {"wavelength_um": round(seen, 4)})}

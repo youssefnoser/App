@@ -36,7 +36,29 @@ def fixture_rows() -> int:
 def test_health_ok():
     response = TestClient(app).get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    # the snapshot block tells the frontend whether the data is fresh
+    assert set(body["snapshot"]) == {"complete", "through_mjd", "exposures"}
+    assert isinstance(body["snapshot"]["complete"], bool)
+    assert isinstance(body["snapshot"]["exposures"], int)
+
+
+def test_health_reports_snapshot_freshness(monkeypatch, tmp_path):
+    """With a complete snapshot, /health says how far the data reaches."""
+    from server import catalog as catalog_module
+
+    monkeypatch.setenv("SPHEREX_CACHE_DIR", str(tmp_path))
+    conn = catalog_module.open_db()
+    try:
+        catalog_module.set_meta(conn, "complete", "1")
+        catalog_module.set_meta(conn, "through_mjd", "60914.484")
+        conn.commit()
+    finally:
+        conn.close()
+    body = TestClient(app).get("/health").json()
+    assert body["snapshot"]["complete"] is True
+    assert body["snapshot"]["through_mjd"] == pytest.approx(60914.484)
 
 
 def test_decode_footprint_known():
