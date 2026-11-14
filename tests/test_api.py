@@ -508,7 +508,27 @@ def test_sequence_frame_failure_is_502(aws_client, monkeypatch, tmp_path):
     assert r.status_code == 502
 
 
-@pytest.mark.parametrize("query", ["fov=0.9", "fov=0.01", "detector=7", "roll=9"])
+def test_sequence_box_covers_a_wide_screen(aws_client, monkeypatch, tmp_path):
+    # Frames load below 0.5 deg of screen height; on a 16:10 screen the box that
+    # covers the corners is about 0.95 deg, so 1 deg must be accepted.
+    seq_setup(monkeypatch, tmp_path)
+    r = aws_client.get("/api/sequence?ra=269.4463&dec=4.7677&fov=1.0&detector=6")
+    assert r.status_code == 200
+    assert r.json()["sequence"]["pixels"] == 1171  # 1 deg at 3.075 arcsec
+
+
+def test_grid_cache_is_bounded_by_bytes(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+    one = 59 * 59 * 4  # a 0.05 deg float32 grid
+    monkeypatch.setattr(app_module, "MAX_GRID_BYTES", 2 * one)
+    for i in range(4):
+        aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s{i}.fits&{SEQ}&roll=0")
+    held = [key[0].rsplit("/", 1)[1] for key in app_module._grids]
+    assert held == ["s2.fits", "s3.fits"]  # oldest dropped first
+    assert sum(v[0].nbytes for v in app_module._grids.values()) <= 2 * one
+
+
+@pytest.mark.parametrize("query", ["fov=1.1", "fov=0.01", "detector=7", "roll=9"])
 def test_sequence_rejects_out_of_range(aws_client, monkeypatch, tmp_path, query):
     seq_setup(monkeypatch, tmp_path)
     base = "ra=269.4463&dec=4.7677"

@@ -8,15 +8,15 @@ import { Loader, priorityList } from './queue.js';
 import { buildSteps, keepStep } from './timeline.js';
 import { PhotoCache } from './photos.js';
 import { parseHash, toHash } from './state.js';
+import { boxCovers, frameBox, LOAD_FOV_DEG } from './viewbox.js';
 
 const HIPS = 'https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube';
-const LOAD_FOV_DEG = 0.5; // frames load only below this field of view
 const SETTLE_MS = 300; // and once the view has been still this long
-const MAX_VIEW_FOV_DEG = 1.0; // /api/view rejects anything wider
 const PIXSCALE_ARCSEC = 3.075;
 const BLINK_MS = 500;
 const TARGET_FOV_DEG = 0.15; // field of view a target button flies to
 const GO_FOV_DEG = 0.25; // field of view after Go when zoomed out too far to load
+const MAX_FOV_DEG = 105; // widest zoom; the engine clamps there too (proj_stereographic.c)
 
 const COPY = {
   hint: 'Zoom in to load SPHEREx frames for this part of the sky.',
@@ -77,8 +77,6 @@ const stackOf = new Map();
 // treats as a single patch (pix below zero). seqOf remembers each box.
 const seqOf = new Map();
 const SEQ_ROLL = 4; // a clean frame is the median of itself and up to 4 exposures either side
-const SEQ_MIN_FOV_DEG = 0.05;
-const SEQ_MAX_FOV_DEG = 0.5;
 // A sequence frame loads twice: first the exposure alone (`clean` false), shown the
 // moment it arrives, then the rolling median, which fills its blank pixels.
 const frameUrl = (pix, uri, clean = false) => {
@@ -248,12 +246,12 @@ function stepHasFrames(index) {
 let viewAbort = null;
 let lastRequest = null;
 
+// Side of the sky box that covers the canvas now, or null when frames should not load.
+const boxNow = () => frameBox(app.sky.fovDeg(), el.canvas.clientWidth, el.canvas.clientHeight);
+
 async function requestView(centre, fov) {
-  const canvas = el.canvas;
-  // Ask for the circle that holds the whole screen, not just its short side.
-  const diag = Math.hypot(canvas.clientWidth, canvas.clientHeight) /
-    Math.max(1, Math.min(canvas.clientWidth, canvas.clientHeight));
-  const viewFov = Math.min(MAX_VIEW_FOV_DEG, fov * diag);
+  const seqFov = boxNow();
+  if (seqFov === null) return;
   lastRequest = { ...centre, fov };
   if (viewAbort) viewAbort.abort();
   const controller = new AbortController();
@@ -262,7 +260,6 @@ async function requestView(centre, fov) {
   render();
   // Stream every exposure that recorded this spot near the chosen wavelength.
   const where = `ra=${round(centre.ra, 5)}&dec=${round(centre.dec, 5)}`;
-  const seqFov = round(Math.min(SEQ_MAX_FOV_DEG, Math.max(SEQ_MIN_FOV_DEG, viewFov)), 3);
   const address = `/api/sequence?${where}&fov=${seqFov}` +
     `&wavelength=${Number(el.wave.value)}&width=${Number(el.waveWidth.value)}`;
   let view;
@@ -381,10 +378,10 @@ function setPlaying(on) {
 
 function render() {
   if (!app.ready) return;
-  const fov = app.sky.fovDeg();
+  const out = boxNow() === null;
   const stats = app.loader.stats;
   let status;
-  if (fov >= LOAD_FOV_DEG) status = COPY.hint;
+  if (out) status = COPY.hint;
   else if (app.viewState === 'finding') status = COPY.finding;
   else if (app.viewState === 'failed') status = COPY.viewFailed;
   else if (app.view && app.view.exposures.length === 0) status = COPY.none;
@@ -393,7 +390,7 @@ function render() {
   else status = COPY.hint;
   if (el.status.textContent !== status) el.status.textContent = status;
 
-  const viewFailed = app.viewState === 'failed' && fov < LOAD_FOV_DEG;
+  const viewFailed = app.viewState === 'failed' && !out;
   const showFailed = viewFailed || stats.failed > 0;
   el.failed.hidden = !showFailed;
   if (showFailed) {
@@ -483,7 +480,7 @@ function tick(now) {
     settledHandled = false;
   }
 
-  const out = fov >= LOAD_FOV_DEG;
+  const out = boxNow() === null;
   if (out !== zoomedOut) {
     zoomedOut = out;
     app.sky.layer.visible = !out;
@@ -502,13 +499,11 @@ function tick(now) {
 
 function viewChanged(c, fov) {
   if (!lastRequest) return true;
-  // A live sequence covers a fixed box: keep it while the view stays well inside,
-  // so panning a little does not start the whole sequence again.
+  // A live sequence covers a fixed box: keep it while the whole canvas is still
+  // inside, so panning a little does not start the whole sequence again.
   const seq = app.view && app.view.sequence;
   if (seq && seq.wavelength === Number(el.wave.value) && seq.width === Number(el.waveWidth.value)) {
-    const dx = Math.abs(c.ra - seq.ra) * Math.cos(c.dec * Math.PI / 180);
-    const dy = Math.abs(c.dec - seq.dec);
-    return dx > seq.fov * 0.25 || dy > seq.fov * 0.25 || fov > seq.fov * 1.2;
+    return !boxCovers(seq, c, fov, el.canvas.clientWidth, el.canvas.clientHeight);
   }
   const arcsec = 1 / 3600;
   return Math.abs(c.ra - lastRequest.ra) * Math.cos(c.dec * Math.PI / 180) > arcsec ||
@@ -538,7 +533,7 @@ function wireControls() {
 
   const zoom = (factor) => {
     const c = app.sky.viewCentre();
-    app.sky.flyTo(c.ra, c.dec, Math.min(180, app.sky.fovDeg() * factor));
+    app.sky.flyTo(c.ra, c.dec, Math.min(MAX_FOV_DEG, app.sky.fovDeg() * factor));
   };
   el.zoomIn.addEventListener('click', () => zoom(0.5));
   el.zoomOut.addEventListener('click', () => zoom(2));

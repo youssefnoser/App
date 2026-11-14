@@ -365,11 +365,16 @@ def patch_frame(
 # (server/ranges.py). The page treats the box as a single patch, so its queue,
 # blink and photo code are the same as for the patch grid.
 
-SEQ_MIN_FOV, SEQ_MAX_FOV = 0.05, 0.5
+# The page sends the side of the square box that covers its whole canvas. Frames
+# load below 0.5 deg of screen height, and the corners of a 16:10 screen are then
+# about 0.95 deg apart, so the box gets the same 2x margin as /api/view.
+SEQ_MIN_FOV, SEQ_MAX_FOV = 0.05, MAX_FOV_DEG
 SEQ_MAX_ROLL = 4
 _grids: dict[tuple, tuple] = {}
 _grids_guard = threading.Lock()
-MAX_GRIDS = 600
+# Bounded by bytes, not count: a 1 deg grid is 16 times a 0.25 deg one. The budget
+# is what the old 600-grid limit allowed at 0.5 deg (585 px float32 grids).
+MAX_GRID_BYTES = 600 * 585 * 585 * 4
 
 
 def _seq_pix(ra: float, dec: float, fov: float, detector) -> int:
@@ -426,8 +431,9 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
         with _grids_guard:
             _grids[key] = out
             _grid_locks.pop(key, None)
-            while len(_grids) > MAX_GRIDS:
-                _grids.pop(next(iter(_grids)))
+            held = sum(g.nbytes for g, _, _ in _grids.values())
+            while held > MAX_GRID_BYTES and len(_grids) > 1:
+                held -= _grids.pop(next(iter(_grids)))[0].nbytes
     return out
 
 
