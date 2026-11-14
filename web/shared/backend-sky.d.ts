@@ -18,6 +18,7 @@ export function createBackendSky(sky:Sky,options?:{
  setBands:(windows:BandWindow[],backgroundFrame:number)=>void;
  setVisible:(visible:boolean)=>void;
  setFill:(fill:boolean)=>void;
+ setFilter:(filter:'raw'|'difference'|'previous'|'trail')=>void;
  showFrame:(index:number)=>void;
  retry:()=>void;
  destroy:()=>void;

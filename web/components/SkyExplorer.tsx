@@ -10,6 +10,8 @@ import { resolveQuery } from '@/lib/resolve';
 import { canShowGaia, needsRefetch, type Cone } from '@/lib/gaiaFetch';
 import type { GaiaSource } from '@/shared/gaia.js';
 import Rotor from './Rotor';
+import FrameFilterControl from './FrameFilterControl';
+import type { FrameFilter } from '@/lib/composite';
 import ZoomRuler from './ZoomRuler';
 import SkyCanvas, { type SkyGoto, type SkyView } from './SkyCanvas';
 import { GoogleMyLocationIcon, GoogleLayersIcon, FramesIcon } from './GoogleMapIcons';
@@ -151,7 +153,7 @@ export default function SkyExplorer() {
   const [gaiaSources, setGaiaSources] = useState<GaiaSource[]>([]);
   const gaiaCone = useRef<Cone | null>(null);
   const [wiseEnabled, setWiseEnabled] = useState(false);
-  const [bandsOpen, setBandsOpen] = useState(false);
+  const [frameFilter, setFrameFilter] = useState<FrameFilter>('raw');
   const searchDock = useRef<HTMLDivElement>(null), searchInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const outside = (event: PointerEvent) => { if (!searchDock.current?.contains(event.target as Node)) setSearchOpen(false); };
@@ -513,11 +515,13 @@ export default function SkyExplorer() {
         observationMjd={sequence.steps[frame]?.mjd}
         onRecentre={(ra, dec) => { setSelected(-1); setLookup(null); updateCoordinates(ra, dec); }}
         wiseEnabled={wiseEnabled}
+        filter={frameFilter}
       />
       <div className="map-top">
         <div className="map-top-left">
           <div className="map-coordinate">ICRS <span>{readout.ra.toFixed(4)}°, {readout.dec >= 0 ? '+' : ''}{readout.dec.toFixed(4)}°</span></div>
         </div>
+        <div className="map-top-right">{showFrames && <FrameFilterControl filter={frameFilter} onFilter={setFrameFilter} meta={sequence.steps[frame]?.meta ?? null} hasFrames={frameCount > 0} />}</div>
       </div>
       <div className="map-tools">
         <button
@@ -557,7 +561,7 @@ export default function SkyExplorer() {
           W
         </button>
       </div>
-      <BandSelector selected={bands} onSelection={onBands} onOpenChange={setBandsOpen} wavelength={sequenceWavelength ?? getBandWavelength(bands[0] ?? 22)} width={sequenceWidth} onWavelength={onWavelength} onWidth={setSequenceWidth} />
+      <BandSelector selected={bands} onSelection={onBands} wavelength={sequenceWavelength ?? getBandWavelength(bands[0] ?? 22)} width={sequenceWidth} onWavelength={onWavelength} onWidth={setSequenceWidth} />
       <ZoomRuler field={5 / zoom} status={status} frames={frameCount} onChange={onField} />
       <section className="timeline rotary-console" aria-label="Sky controls">
         <><div className="knob-section time-section half-section"><Rotor id="time-knob" label="Observation frame" value={frame} min={0} max={Math.max(1, lastFrame)} step={1} labels={Array.from({length:6}, (_, i) => sequence.steps[Math.round(i * lastFrame / 5)]?.date.slice(5).replace('-', '/') ?? '--')} onChange={setFrame} onGrab={() => setPlaying(false)} progress={progress?.total ? status : undefined}><span>{sequence.steps[frame]?.date ?? (status.tone === 'idle' ? '—' : status.title)}</span><small>FRAME {String(frameCount ? frame + 1 : 0).padStart(2, '0')} / {String(frameCount).padStart(2, '0')}</small>{frameCount > 0 && <small className="load-status" data-tone={status.tone} title={status.detail}>{status.title}</small>}</Rotor></div>

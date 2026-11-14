@@ -87,6 +87,9 @@ Object names are resolved in the browser by CDS Sesame (it allows any origin), n
 | `scripts/data/snapshot_from_aws.py` | fill the snapshot from the AWS mirror alone: list the bucket, read each file's header, resumable (network) |
 | `server/pixels.py` | `science_image()` (IMAGE minus ZODI, saturation-aware masking), `masked_pixels()`, `BAD_PIXEL_MASK`, `HARD_PIXEL_MASK` |
 | `server/reproject.py` | `resample_north_up()` (NaN-aware north-up resampling), `wavelength_at()` |
+| `server/composite.py` | NaN-aware static-sky and previous-visit differences, and date-coloured trails |
+| `web/lib/composite.ts` | Frame filter names and metadata colour keys |
+| `web/components/FrameFilterControl.tsx` | Raw, Difference, Previous visit and Trail controls and colour key |
 | `server/app.py` | routes, `render_frame_cached()`, `RENDER_VERSION` in the PNG cache path |
 | `scripts/data/resolve_targets.py` | one-off: SIMBAD positions and proper motions, cross-checked against Gaia DR3 |
 | `scripts/data/check_targets.py` | exposure counts per challenge target (network) |
@@ -178,3 +181,7 @@ picker exposes the sequence wavelength and tolerance. Choosing a band updates
 its centre; choosing Exact selected band uses its native channel window.
 The wider options explicitly include nearby wavelengths to provide more
 exposures for fill; they do not guarantee complete coverage for every exposure.
+
+### Frame filters
+
+`/api/sequence` and `/api/frame.png` accept `filter=raw|difference|previous|trail` (default `raw`). Filtered sequences use separate cache keys. Difference subtracts the static sky; Previous visit subtracts the earlier visit (the next visit for the first); Trail colours earlier visits by date. Frame metadata supplies the reference dates and colour key.

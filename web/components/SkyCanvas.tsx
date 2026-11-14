@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { initSky, type Sky } from '@/shared/sky.js';
 import { createBackendSky, type BackendTimeline, type LoadProgress } from '@/shared/backend-sky.js';
 import { sequenceWindows } from '@/lib/backend-bands';
+import type { FrameFilter } from '@/lib/composite';
 import GaiaOverlay from './GaiaOverlay';
 import type { GaiaSource } from '@/shared/gaia.js';
 
@@ -29,6 +30,7 @@ type Props = {
   onProgress: (progress: LoadProgress) => void;
   onView: (view: SkyView) => void;
   showFrames: boolean;
+  filter: FrameFilter;
   grid: boolean;
   name: string;
   objectType: string;
@@ -61,6 +63,7 @@ export default function SkyCanvas({
   onProgress,
   onView,
   showFrames,
+  filter,
   grid,
   name,
   objectType,
@@ -154,6 +157,7 @@ export default function SkyCanvas({
     backendRef.current?.setBands(sequenceWindows(bands, sequenceWavelength, sequenceWidth), backgroundFrame);
   }, [bandKey, sequenceWavelength, sequenceWidth, backgroundFrame, ready]);
   useEffect(() => { backendRef.current?.setVisible(showFrames); }, [showFrames, ready]);
+  useEffect(() => { backendRef.current?.setFilter(filter); }, [filter, ready]);
   useEffect(() => {
     if (skyRef.current) skyRef.current.core.lines.equatorial.visible = grid;
   }, [grid, ready]);

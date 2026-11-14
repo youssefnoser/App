@@ -13,12 +13,17 @@ const DEG = 180 / Math.PI;
 // Slack when testing whether a loaded box holds the canvas: 0.36 arcsec, a ninth of
 // a frame pixel. The server rounds a box centre to 5 decimals of a degree.
 const HOLD_SLACK_DEG = 1e-4;
+// A filtered box (sequence.filter other than 'raw') compares every frame with the
+// other visits of the same sequence, so the server needs the wavelength window on
+// every frame, not only on the cleaned one.
 export function frameAddress(sequence, uri, clean = false) {
   const p = new URLSearchParams({uri, ra:String(sequence.ra), dec:String(sequence.dec), fov:String(sequence.fov), roll:clean ? '4' : '0'});
-  if (clean && sequence.wavelength != null) {
+  const filtered = sequence.filter != null && sequence.filter !== 'raw';
+  if ((clean || filtered) && sequence.wavelength != null) {
     p.set('wavelength', String(sequence.wavelength));
     p.set('width', String(sequence.width));
   }
+  if (filtered) p.set('filter', sequence.filter);
   return `/api/frame.png?${p}`;
 }
 
@@ -47,7 +52,13 @@ export function createBackendSky(sky, {
   // wanted: the exposure the user is looking at ({uri, mjd}); it is shown whenever a
   // box has it. drawn: the boxes whose photos are drawn (a Set of cells).
   let wanted = null, drawn = null;
-  const frames = new Map(), metadata = new Map(); // frames: key -> box; metadata: uri -> X-Frame-Meta
+  // filter: 'raw', 'difference', 'previous' or 'trail'. It is part of the selection
+  // (bandKey) like the bands, so a filtered box is a box of its own.
+  let filter = 'raw';
+  // frames: key -> box; metadata: `${bandKey}|${uri}` -> X-Frame-Meta, so a raw and a
+  // filtered frame of the same exposure keep their own.
+  const frames = new Map(), metadata = new Map();
+  const metaKey = item => `${boxes.get(item.pix)?.bandKey}|${item.uri}`;
   const boxes = new Map(); // cell -> {ra, dec, fov, bandKey}: every box asked for so far
   const report = (message) => { if (!disposed) onStatus(message); };
   // Loading progress as numbers, for the timeline and zoom controls. phase is one of
@@ -134,7 +145,7 @@ export function createBackendSky(sky, {
     if (disposed || !view) return;
     const {cells,uris} = stage();
     drawn = cells;
-    steps = buildSteps(view.exposures).filter(step=>uris.has(step.uri)).map(step=>({...step,meta:metadata.get(step.uri) || null}));
+    steps = buildSteps(view.exposures).filter(step=>uris.has(step.uri)).map(step=>({...step,meta:metadata.get(`${bandKey}|${step.uri}`) || null}));
     // The wanted exposure if it is a step, else the step nearest to it in time.
     wanted ??= steps[0] ? {uri:steps[0].uri,mjd:steps[0].mjd} : null;
     const current = steps.find(step=>step.uri===wanted?.uri) ?? (steps.length
@@ -160,7 +171,7 @@ export function createBackendSky(sky, {
       const url = frameAddress(sequence,item.uri,true);
       assets.load(url,signal,item.pix).then(asset=>{
         if (disposed || token !== generation || !fill) return;
-        metadata.set(item.uri,asset.meta);
+        metadata.set(metaKey(item),asset.meta);
         applied.set(item.key,url);
         photos.replace(item.pix,item.uri,asset.url,
           {ra:sequence.ra,dec:sequence.dec,orientation:0,pixscale:3.075});
@@ -185,7 +196,7 @@ export function createBackendSky(sky, {
         notify();pumpUpgrades();
         return;
       }
-      metadata.set(item.uri,asset.meta);
+      metadata.set(metaKey(item),asset.meta);
       applied.set(item.key,asset.address);
       photos.ensure(item.pix,item.uri,asset.url,
         {ra:sequence.ra,dec:sequence.dec,orientation:0,pixscale:3.075});
@@ -223,6 +234,7 @@ export function createBackendSky(sky, {
         while(next<windows.length) {
           const i=next++, window=windows[i];
           const params=new URLSearchParams({ra:centre.ra.toFixed(5),dec:centre.dec.toFixed(5),fov:boxFov.toFixed(4),...Object.fromEntries(Object.entries(window).filter(([key])=>!(key==='detector' && window.wavelength!=null)).map(([key,value])=>[key,String(value)]))});
+          if(filter!=='raw') params.set('filter',filter);
           const response=await fetchFn(`/api/sequence?${params}`,{signal});
           if(!response.ok) throw Error(`HTTP ${response.status}`);
           answers[i]=await response.json();
@@ -252,6 +264,14 @@ export function createBackendSky(sky, {
       request.abort();
       report('The SPHEREx backend did not answer. Recenter to try again.');progress('error');
     }
+  }
+  // A new band or filter choice: ask for its box at the next settled view. Boxes of
+  // earlier choices stay cached, so returning to one costs no download.
+  function reselect(nextWindows,nextFilter) {
+    const key=JSON.stringify(nextFilter==='raw' ? nextWindows : [nextWindows,nextFilter]);
+    if(key===bandKey) return;
+    bandKey=key;windows=nextWindows;filter=nextFilter;
+    lastRequest=null;lastMove=performance.now();generation++;request?.abort();loader?.setQueue([]);
   }
   function tick(now) {
     if(disposed) return;
@@ -293,10 +313,11 @@ export function createBackendSky(sky, {
   return {
     refresh,
     setBands(next,backgroundFrame) {
-      const key=JSON.stringify(next);
-      if(key!==bandKey) {bandKey=key;windows=next;lastRequest=null;lastMove=performance.now();generation++;request?.abort();loader?.setQueue([]);}
+      reselect(next,filter);
       sky.core.dss.frame=backgroundFrame;
     },
+    /** 'raw', 'difference', 'previous' or 'trail': how every frame of the blink is drawn. */
+    setFilter(next) {reselect(windows,next);},
     setVisible(value) {
       if(visible===value) return;
       visible=value;layer.visible=value;

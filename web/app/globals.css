@@ -95,7 +95,7 @@ body:not(.nav-collapsed) .navigation-toggle{visibility:hidden;opacity:0;pointer-
 /* Map-style visual band chooser: preview tile opens a horizontal tray. */
 .band-control{position:absolute;left:18px;right:18px;bottom:24px;z-index:9;pointer-events:none}.band-control>#bands-toggle{position:absolute;right:0;bottom:0;width:106px;height:80px;border:2px solid #7a7a7a;border-radius:10px;padding:10px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;gap:0;background:radial-gradient(ellipse at 70% 20%,#838383a0,transparent 45%),radial-gradient(circle at 28% 40%,#f4f4f4 0 1px,transparent 2px),radial-gradient(circle at 70% 25%,#f0d4ff 0 2px,#b282c14a 4px,transparent 15px),linear-gradient(135deg,#303030,#191919);box-shadow:0 5px 18px #0007;pointer-events:auto;text-shadow:0 1px 4px #000}.band-control>#bands-toggle>span:first-child{font-size:20px;color:#eaeaea}.band-control>#bands-toggle>span:last-child{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600}#bands-button-value{font-size:9px;border:0;padding:2px 4px;background:#1f1f1f90}.band-control:has(#bands-toggle[aria-expanded=true])>#bands-toggle{visibility:hidden}#bands-panel{position:relative;right:auto;left:0;bottom:0;width:100%;max-width:none;background:#1b1b1bf2;border:1px solid #565656;border-radius:13px;padding:17px 18px 13px;box-shadow:0 12px 40px #0009;pointer-events:auto}.band-tray-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.band-tray-heading .eyebrow{font-size:7px;letter-spacing:1.6px}.band-tray-heading h2{font-size:17px;margin-top:5px}.band-tray-heading h2>span{font-size:10px;border:0;margin-left:9px;color:#a2a2a2;padding:0}#bands-close{position:static;flex-shrink:0;width:29px;height:29px;background:#393939;border-radius:7px}.band-card-list{display:flex;gap:12px;overflow-x:auto;padding:3px 3px 10px;scroll-snap-type:x proximity;scrollbar-width:thin;scrollbar-color:#6a6a6a #2a2a2a}.band-card{position:relative;flex:1 0 150px;height:108px;text-align:left;overflow:hidden;border:2px solid #535353;border-radius:8px;padding:10px;color:#fff;scroll-snap-align:start;background:radial-gradient(ellipse at 65% 15%,var(--cloud),transparent 65%),radial-gradient(circle at 23% 26%,#f5eeff 0 1px,transparent 2px),radial-gradient(circle at 75% 48%,#fff 0 1px,transparent 2px),radial-gradient(circle at 47% 30%,#f4f4f4 0 2px,#c2acff55 4px,transparent 15px),radial-gradient(circle at 85% 15%,#fff 0 1px,transparent 2px),linear-gradient(150deg,#252525,#0e0e0e);box-shadow:inset 0 -50px 30px -15px #090909cc;transition:border-color .18s,transform .18s;--cloud:#6a6a6a90}.band-card:hover{transform:translateY(-2px);border-color:#b3b3b3}.band-card[aria-pressed=true]{border-color:#f39787;box-shadow:0 0 0 1px #f3978733,inset 0 -50px 30px -15px #090909cc}.band-card-top{font-size:7px;letter-spacing:1.5px;color:#dcdcdc}.band-card-bottom{position:absolute;left:10px;bottom:10px}.band-card-bottom strong{font-size:13px;display:block;font-weight:500}.band-card-bottom small{font-size:9px;color:#bfbfbf;display:block;margin-top:4px}.band-check{display:none;position:absolute;right:9px;top:8px;background:#e88676;border-radius:50%;width:18px;height:18px;text-align:center;line-height:18px;font-size:11px}.band-card[aria-pressed=true] .band-check{display:block}.band-preview-2{--cloud:#6e6e6eb0}.band-preview-3{--cloud:#906b9bb0}.band-preview-4{--cloud:#ac7186a0}.band-preview-5{--cloud:#ac846ba0}.band-preview-6{--cloud:#9b9b9bb0}#bands-panel #band-status{display:inline;font-size:9px;color:#c2c2c2;margin:0;line-height:1.6}.band-tray-note{float:right;font-size:8px;color:#8d8d8d;margin-top:3px}@media(max-width:700px){.band-control{left:12px;right:12px;bottom:18px}.band-control>#bands-toggle{width:92px;height:75px}#bands-panel{width:100%;padding:14px 12px 12px}.band-card{flex:0 0 145px;height:103px}.band-card-list{gap:9px}.band-tray-note{float:none;display:block;margin-top:5px}.band-tray-heading h2>span{display:none}.band-tray-heading{margin-bottom:10px}}@media(prefers-reduced-motion:reduce){.band-card{transition:none}}
 /* Smooth, reversible Bands tray transitions without display toggling. */
-#bands-panel{opacity:0;visibility:hidden;transform:translateY(24px) scale(.985);transform-origin:bottom right;pointer-events:none;transition:opacity .24s ease,transform .32s cubic-bezier(.22,1,.36,1),visibility 0s linear .32s}.band-control.is-open #bands-panel{opacity:1;visibility:visible;transform:translateY(0) scale(1);pointer-events:auto;transition:opacity .24s ease,transform .32s cubic-bezier(.22,1,.36,1),visibility 0s}.band-control>#bands-toggle{opacity:1;visibility:visible;transition:opacity .18s ease,transform .24s ease;transform:translateY(0)}.band-control.is-open>#bands-toggle,.band-control:has(#bands-toggle[aria-expanded=true])>#bands-toggle{opacity:0;visibility:visible;transform:translateY(8px);pointer-events:none}@media(prefers-reduced-motion:reduce){#bands-panel,.band-control.is-open #bands-panel,.band-control>#bands-toggle{transition:none;transform:none}}
+#bands-panel{opacity:0;visibility:hidden;transform:translateY(24px) scale(.985);transform-origin:bottom right;pointer-events:none;transition:opacity .24s ease,transform .32s cubic-bezier(.22,1,.36,1),visibility 0s linear .32s}.band-control.is-open #bands-panel{opacity:1;visibility:visible;transform:translateY(0) scale(1);pointer-events:auto;transition:opacity .24s ease,transform .32s cubic-bezier(.22,1,.36,1),visibility 0s}.band-control>#bands-toggle{opacity:1;visibility:visible;transition:opacity .18s ease,transform .24s ease;transform:translateY(0)}.band-control.is-open>#bands-toggle,.band-control:has(#bands-toggle[aria-expanded=true])>#bands-toggle{opacity:1;visibility:visible;transform:none;pointer-events:auto}@media(prefers-reduced-motion:reduce){#bands-panel,.band-control.is-open #bands-panel,.band-control>#bands-toggle{transition:none;transform:none}}
 /* Compact map-style Bands dock with multi-select preview cards. */
 .band-control{bottom:20px;left:18px;right:20px}.band-control>#bands-toggle{width:auto;min-width:auto;height:42px;flex-direction:row;align-items:center;justify-content:flex-start;gap:10px;padding:7px 12px;border:1px solid #6e6e6e;border-radius:10px;background:#222222ed;box-shadow:0 5px 20px #0006;text-shadow:none;outline-offset:3px}.band-control>#bands-toggle:focus:not(:focus-visible){outline:none}.band-control>#bands-toggle>span:first-child{font-size:19px;color:#c5c5c5}.bands-toggle-icon{padding-right:8px;border-right:1px solid #505050}.bands-miniatures{display:flex;gap:3px}.bands-miniatures i{width:23px;height:25px;border:1px solid #a6a6a64a;border-radius:3px;background:radial-gradient(circle at 40% 35%,#fff 0 1px,transparent 2px),radial-gradient(ellipse at 65% 30%,#d6d6d6,#262626 75%)}.bands-miniatures i:nth-child(2){background:radial-gradient(circle at 60% 35%,#fff 0 1px,transparent 2px),radial-gradient(ellipse at 40% 20%,#bf8fba,#313131 75%)}.bands-miniatures i:nth-child(3){background:radial-gradient(circle at 50% 55%,#fff 0 1px,transparent 2px),radial-gradient(ellipse at 60% 30%,#d6a38e,#363636 75%)}.bands-toggle-label{font-size:11px;font-weight:500;display:flex;align-items:center;gap:6px}.bands-chevron{font-size:18px;color:#cecece;margin-left:3px}#bands-button-value{font:9px 'Space Grotesk',sans-serif;color:#d3d3d3;background:#3d3d3d;border-radius:4px;padding:3px 4px}.band-control>#bands-toggle>span:last-child{font-size:18px;font-weight:400}.band-control.is-open>#bands-toggle{transform:translateY(5px)}#bands-panel{background:linear-gradient(145deg,#262626f5,#1a1a1af5);border-color:#5e5e5e;border-radius:14px;padding:17px 18px 12px}.band-tray-actions{display:flex;align-items:center;gap:12px}.band-tray-actions #bands-all{background:#3d3d3d;border:1px solid #686868;border-radius:6px;padding:7px 11px;color:#d7d7d7;font-size:10px;cursor:pointer}.band-tray-actions #bands-all:disabled{opacity:.45;cursor:default}.band-card{height:122px;border-color:#525252;border-radius:9px;flex-basis:155px}.band-card[aria-pressed=true]{border-color:#e0e0e0;box-shadow:0 0 0 1px #e0e0e02a,inset 0 -50px 30px -15px #090909cc}.band-card[aria-pressed=false]{filter:saturate(.55)}.band-card[aria-pressed=false]:hover{filter:none}.band-check{background:#cccccc;color:#252525;border:1px solid #e9e9e9;box-shadow:0 2px 8px #0004}.band-card-top{font-size:8px;color:#cacaca}.band-card-bottom strong{font-size:13px}.band-card-bottom small{color:#b2b2b2;font-size:9px}.band-tray-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:2px}.band-tray-note{float:none;margin:0;font-size:8px}.band-card-list{padding-bottom:12px}.band-tray-heading h2>span{font-size:10px;color:#adadad}#bands-close{background:#3f3f3f;border:1px solid #545454}.compass{bottom:88px}@media(max-width:700px){.band-control{left:12px;right:12px;bottom:18px}.band-control>#bands-toggle{width:auto;min-width:auto;height:40px;padding:6px 10px;gap:8px}.bands-miniatures i{width:20px;height:23px}.band-control>#bands-toggle>span:first-child{font-size:17px}.band-tray-heading{gap:10px}.band-tray-actions{gap:7px}.band-tray-actions #bands-all{padding:6px 7px;font-size:9px}.band-card{flex-basis:145px;height:112px}.band-tray-footer{align-items:flex-start;flex-direction:column;gap:3px}#bands-panel{padding:14px 12px 11px}}
 /* Quieter, flat coordinate-entry styling. */
@@ -1765,4 +1765,146 @@ body:not(.nav-collapsed) .search-dock.is-searching,
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
+}
+
+
+/* Frame filter (components/FrameFilterControl.tsx): top right of the map, above
+   the toolbar it belongs with (the "Show SPHEREx frames" toggle hides both). Same
+   surface, border, radius and pressed state as .map-tools, so it reads as part
+   of that set; solid, not glass: the toolbar and band popover already carry the
+   blur. The key hangs under the switch, beside the toolbar rather than over it,
+   and has no accent of its own: its colours are the ones on the map. */
+.map-top-right {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-left: auto;
+  pointer-events: none;
+}
+.map-top-right > * {
+  pointer-events: auto;
+}
+.frame-filter-switch {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  background: rgba(5, 8, 16, 0.92);
+}
+.frame-filter-switch button {
+  padding: 7px 11px;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.frame-filter-switch button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+}
+.frame-filter-switch button[aria-pressed='true'] {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+}
+.frame-filter-key {
+  position: absolute;
+  top: 100%;
+  right: 58px; /* clear of the toolbar column under the switch */
+  margin-top: 8px;
+  width: 270px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  background: rgba(5, 8, 16, 0.94);
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.frame-filter-key ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.frame-filter-key li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.frame-filter-key li.is-dim {
+  color: #94a3b8;
+}
+.frame-filter-key li.is-dim .frame-filter-swatch {
+  opacity: 0.35;
+}
+.frame-filter-swatch {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  margin-top: 3px;
+  border-radius: 2px;
+  outline: 1px solid rgba(255, 255, 255, 0.4); /* keeps pure blue visible on the dark key */
+}
+.frame-filter-key p {
+  margin: 0;
+}
+.frame-filter-key ul + p {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+}
+/* Phones: the left controls take the whole top row, so the filter gets the row
+   under it, right-aligned like the toolbar; the key follows below. */
+@media (max-width: 700px) {
+  .map-top-right {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+  }
+  .frame-filter-key {
+    width: min(270px, calc(100vw - 100px));
+  }
+  /* The floating status toast lands on the key here; its text is also in the
+     status line at the bottom of the map, so it steps aside while the key is up. */
+  body:has(.frame-filter-key) .search-feedback {
+    visibility: hidden;
+  }
+}
+@media (pointer: coarse) {
+  .frame-filter-switch button {
+    min-height: 36px;
+  }
+}
+/* One neutral surface for each dock; children never blur or glow separately. */
+.map-tools { overflow: hidden; }
+.map-tools button { border: 0 !important; border-radius: 5px; box-shadow: none !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+.map-tools button span { background: transparent !important; height: auto; margin: 0; }
+.map-tools .overlay-toggle-btn.active { background: #ffffff24 !important; color: #f0f0f0 !important; box-shadow: none !important; }
+.band-control > #bands-toggle:hover,
+.band-control > #bands-toggle[aria-expanded='true'] { background: var(--glass-surface) !important; border-color: #ffffff7a !important; box-shadow: var(--glass-shadow) !important; }
+#bands-button-value { background: #ffffff14 !important; border-color: #ffffff3b !important; color: #eeeeee !important; text-shadow: none !important; }
+.band-pop { --band: #e0e0e0; --band-soft: #ffffff18; }
+.band-pop-number input, .band-pop-segments input:checked + span { color: #f0f0f0; border-color: #ffffff55; box-shadow: none; }
+.band-pop-stepper > button:hover:not(:disabled), .band-pop-field:focus-within { border-color: #ffffff66; }
+.frame-filter-switch, .frame-filter-key { background: var(--glass-surface); border-color: var(--glass-edge); box-shadow: var(--glass-shadow); color: #dddddd; }
+.frame-filter-switch button { color: #b5b5b5; }
+.frame-filter-switch button[aria-pressed='true'] { background: #ffffff24; color: #f0f0f0; }
+.frame-filter-key li.is-dim, .frame-filter-key ul + p { color: #b5b5b5; }
+@media (max-width: 700px) {
+  .map-top-right { top: calc(100% + 48px); }
+  .frame-filter-switch button { padding: 7px 8px; }
+  .map-tools { top: 210px; }
+}
+/* Popovers must cover the playback console (which has its own stacking layer). */
+.sky .band-control.is-open { z-index: 70; }
+@media (max-width: 700px) {
+  .map-top { top: 64px !important; }
+  .map-top-right { top: calc(100% + 8px); }
+  .field-ruler { right: 64px; }
 }
