@@ -32,6 +32,7 @@ from server.cutouts import CutoutError, cache_dir, check_uri, fetch_cutout
 from server.irsa import Exposure, IrsaError, find_exposures
 from server.mirror import fetch_exposure, open_frame, prefetch
 from server.ranges import fetch_crop
+from server.wavelengths import exposure_wavelengths
 from server.patches import (
     CROP_DEG,
     NPIX,
@@ -371,7 +372,7 @@ _grids_guard = threading.Lock()
 MAX_GRIDS = 600
 
 
-def _seq_pix(ra: float, dec: float, fov: float, detector: int) -> int:
+def _seq_pix(ra: float, dec: float, fov: float, detector) -> int:
     """The page's patch number for one sequence box: negative, so it can never be a
     real HEALPix patch, and different for every box so cached photos do not mix."""
     return -1 - zlib.crc32(f"{ra}|{dec}|{fov}|{detector}".encode()) % 2_000_000_000
@@ -430,14 +431,21 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
     return out
 
 
-def _sequence(ra: float, dec: float, detector: int) -> list[tuple[Exposure, int]]:
-    """(exposure, visit index) for every exposure of `detector` whose footprint holds
-    the point, in time order."""
-    out = []
+def _sequence(ra: float, dec: float, detector: int | None = None,
+              wavelength: float | None = None, width: float = 0.05,
+              ) -> list[tuple[Exposure, int, float | None]]:
+    """(exposure, visit index, wavelength) for every exposure whose footprint holds
+    the point, in time order, kept if it is on `detector` or, when `wavelength` is
+    given, if the wavelength it records at the point is within the fraction `width`
+    of it (0.05 keeps 5 % either side). Wavelength is None in detector mode."""
+    covering = []
     for index, visit in enumerate(group_visits(_exposures_for_cell(cell_of(ra, dec)))):
-        out += [(e, index) for e in visit
-                if e.detector == detector and footprint_contains(e.footprint, ra, dec)]
-    return out
+        covering += [(e, index) for e in visit if footprint_contains(e.footprint, ra, dec)]
+    if wavelength is None:
+        return [(e, v, None) for e, v in covering if e.detector == detector]
+    seen = exposure_wavelengths([e for e, _ in covering], ra, dec)
+    return [(e, v, w) for (e, v), w in zip(covering, seen)
+            if abs(w - wavelength) <= wavelength * width]
 
 
 @app.get("/api/sequence")
@@ -445,46 +453,59 @@ def sequence(
     ra: float = Query(ge=0, lt=360),
     dec: float = Query(ge=-90, le=90),
     fov: float = Query(ge=SEQ_MIN_FOV, le=SEQ_MAX_FOV),
-    detector: int = Query(ge=1, le=6),
+    detector: int | None = Query(None, ge=1, le=6),
+    wavelength: float | None = Query(None, ge=0.7, le=5.1),
+    width: float = Query(0.05, gt=0, le=0.5),
 ) -> dict:
     """The time sequence of one detector at a point, shaped like `/api/view` with a
     single patch. `first` marks the first, middle and last exposure of each visit:
     the page loads those before the rest, so a blink across the whole time span is
     possible after a few frames."""
     ra, dec, fov = round(ra, 5), round(dec, 5), round(fov, 3)
+    if (detector is None) == (wavelength is None):
+        raise HTTPException(422, "Give either a detector or a wavelength.")
     try:
-        items = _sequence(ra, dec, detector)
+        items = _sequence(ra, dec, detector, wavelength, width)
     except IrsaError as err:
         raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
+    except CutoutError as err:
+        raise HTTPException(
+            502, "The SPHEREx archive (IRSA) did not return the wavelength map. Try again.") from err
     by_visit: dict[int, list[Exposure]] = {}
-    for e, visit in items:
+    for e, visit, _ in items:
         by_visit.setdefault(visit, []).append(e)
     coarse = set()
     for members in by_visit.values():
         coarse.update(m.uri for m in (members[0], members[len(members) // 2], members[-1]))
-    pix = _seq_pix(ra, dec, fov, detector)
+    pix = _seq_pix(ra, dec, fov, f"{detector}|{wavelength}|{width}")
     return {
         "cell": pix,
         "sequence": {"ra": ra, "dec": dec, "fov": fov, "detector": detector,
-                     "pixels": _seq_size(fov)},
+                     "wavelength": wavelength, "width": width, "pixels": _seq_size(fov)},
         "cells": [{"pix": pix, "ra": ra, "dec": dec, "ring": 0}],
         "exposures": [
             {"uri": e.uri, "obs_id": e.obs_id, "mjd": e.mjd,
              "date": Time(e.mjd, format="mjd").iso[:10], "detector": e.detector,
-             "visit": visit, "first": e.uri in coarse, "cells": [pix]}
-            for e, visit in items
+             "visit": visit, "first": e.uri in coarse, "cells": [pix],
+             **({} if seen is None else {"wavelength_um": round(seen, 4)})}
+            for e, visit, seen in items
         ],
     }
 
 
-def _render_sequence_frame(uri: str, ra: float, dec: float, fov: float, roll: int):
+def _render_sequence_frame(uri: str, ra: float, dec: float, fov: float, roll: int,
+                           wavelength: float | None = None, width: float = 0.05):
     """One sequence image: the exposure itself (`roll=0`) or the NaN-ignoring median
     of it and up to `roll` exposures either side from the same visit and detector.
     Neighbours that fail or miss the box are left out; the exposure itself must work."""
     grid, wavelength_um, meta = _seq_grid(uri, ra, dec, fov)
     if roll == 0:
         return to_png(grid), {**meta, "wavelength_um": wavelength_um}
-    items = _sequence(ra, dec, meta["detector"])
+    # Neighbours come from the same filtered sequence the page is showing, so in
+    # wavelength mode the median only mixes exposures of nearly the same colour.
+    items = [(e, v) for e, v, _ in (
+        _sequence(ra, dec, None, wavelength, width) if wavelength is not None
+        else _sequence(ra, dec, meta["detector"]))]
     uris = [e.uri for e, _ in items]
     grids, waves = [grid], [wavelength_um]
     if uri in uris:
@@ -518,20 +539,23 @@ def sequence_frame(
     dec: float = Query(ge=-90, le=90),
     fov: float = Query(ge=SEQ_MIN_FOV, le=SEQ_MAX_FOV),
     roll: int = Query(2, ge=0, le=SEQ_MAX_ROLL),
+    wavelength: float | None = Query(None, ge=0.7, le=5.1),
+    width: float = Query(0.05, gt=0, le=0.5),
 ) -> Response:
     try:
         check_uri(uri)
     except ValueError as err:
         raise HTTPException(422, "That is not a SPHEREx file path.") from err
     ra, dec, fov = round(ra, 5), round(dec, 5), round(fov, 3)
-    name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}|{roll}".encode()).hexdigest()
+    mix = f"|{wavelength}|{width}" if wavelength is not None and roll else ""
+    name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}|{roll}{mix}".encode()).hexdigest()
     base = cache_dir() / "png" / f"v{RENDER_VERSION}-seq" / name[:2] / name
     png_path, meta_path = base.with_suffix(".png"), base.with_suffix(".json")
     try:
         png, meta = png_path.read_bytes(), json.loads(meta_path.read_text())
     except (OSError, ValueError):
         try:
-            png, meta = _render_sequence_frame(uri, ra, dec, fov, roll)
+            png, meta = _render_sequence_frame(uri, ra, dec, fov, roll, wavelength, width)
         except IrsaError as err:
             raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
         except CutoutError as err:
