@@ -178,3 +178,74 @@ def test_cut_gives_the_same_wavelength_as_the_full_file():
             want = wavelength_at(full, ra, dec)
             got = wavelength_at(cut(path, ra, dec, 0.004), ra, dec)
     assert got == pytest.approx(want, rel=1e-6)
+
+
+# --- review fixes ---
+
+
+def without(name: str) -> bytes:
+    with fits.open(io.BytesIO(archive_file())) as hdul:
+        buf = io.BytesIO()
+        fits.HDUList([h for h in hdul if h.name != name]).writeto(buf)
+        return buf.getvalue()
+
+
+def test_archive_file_without_wavelength_table_is_refused(isolated_cache):
+    """A frame cannot be drawn without WCS-WAVE, so such a file is not cached."""
+    with pytest.raises(CutoutError):
+        fetch_exposure(URI, client=client_serving(without("WCS-WAVE")))
+    assert not list((isolated_cache / "exposures").glob("*.fits"))
+
+
+def test_unreadable_cached_exposure_is_deleted_so_it_is_fetched_again(isolated_cache):
+    path = mirror._cache_path(URI)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(without("ZODI"))
+    with pytest.raises(CutoutError):
+        mirror.open_frame(path)
+    assert not path.exists()
+
+
+def test_disk_error_while_downloading_is_cutout_error(isolated_cache):
+    class Broken(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"SIMPLE  ="
+            raise OSError(28, "No space left on device")
+
+    client = httpx.Client(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=Broken())))
+    with pytest.raises(CutoutError):
+        fetch_exposure(URI, client=client)
+    assert not list((isolated_cache / "exposures").glob("*.fits"))  # nothing half-written kept
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "lots"])
+def test_exposure_cache_cap_that_is_not_a_number_falls_back(monkeypatch, bad):
+    monkeypatch.setenv("SPHEREX_EXPOSURE_CACHE_GB", bad)
+    assert mirror.cache_cap_bytes() == int(mirror.DEFAULT_CAP_GB * 1e9)
+
+
+def test_evicting_a_file_closes_its_open_frame(isolated_cache, monkeypatch):
+    path = fetch_exposure(URI, client=client_serving(archive_file()))
+    mirror.open_frame(path)
+    assert any(key[0] == str(path) for key in mirror._frames)
+    monkeypatch.setenv("SPHEREX_EXPOSURE_CACHE_GB", "0")
+    evict()
+    assert not path.exists()
+    assert not any(key[0] == str(path) for key in mirror._frames)
+
+
+def test_a_frame_is_built_outside_the_shared_lock(isolated_cache, monkeypatch):
+    """Building a Frame is slow; other threads must not wait on it to reach theirs."""
+    path = fetch_exposure(URI, client=client_serving(archive_file()))
+    mirror._frames.clear()
+    seen = []
+
+    class Probe:
+        def __init__(self, p):
+            seen.append(mirror._frames_guard.locked())
+
+    monkeypatch.setattr(mirror, "Frame", Probe)
+    frame = mirror.open_frame(path)
+    assert seen == [False]
+    assert mirror.open_frame(path) is frame  # second open is the cached one
