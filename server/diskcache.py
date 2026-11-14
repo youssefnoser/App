@@ -15,6 +15,7 @@ left behind by a writer that died. Readers already treat a missing file as a
 miss and render again, so deleting under a live server is safe.
 """
 
+import math
 import os
 import threading
 import time
@@ -22,19 +23,29 @@ from pathlib import Path
 
 DEFAULT_CAP_GB = 10.0
 FOLDERS = ("png", "grids", "cutouts", "tap")
-PRUNE_EVERY = 500  # cache writes between background prunes
+# A prune walks every file, so it runs after PRUNE_EVERY writes and never more
+# often than PRUNE_MIN_INTERVAL_S: a few seconds of disk reads per ten minutes
+# at most, even with millions of small frames.
+PRUNE_EVERY = 500
+PRUNE_MIN_INTERVAL_S = 600.0
 TMP_MAX_AGE_S = 3600.0
+# A cell's exposure list fetched from IRSA is reused for a day (server/app.py).
+TAP_MAX_AGE_S = 86400.0
 
 _writes = 0
+_last_prune = float("-inf")
 _guard = threading.Lock()
 _running = threading.Lock()
 
 
 def cap_bytes() -> int:
-    """Size limit of the rendered caches: SPHEREX_RENDER_CACHE_GB, default 10."""
+    """Size limit of the rendered caches: SPHEREX_RENDER_CACHE_GB, default 10.
+    A value that is not a finite number falls back to the default."""
     try:
         gb = float(os.environ.get("SPHEREX_RENDER_CACHE_GB", DEFAULT_CAP_GB))
     except ValueError:
+        gb = DEFAULT_CAP_GB
+    if not math.isfinite(gb):
         gb = DEFAULT_CAP_GB
     return int(max(gb, 0.0) * 1e9)
 
@@ -74,10 +85,15 @@ def prune(root: Path, cap_bytes: int, tap_max_age_s: float) -> None:
         total -= size
 
 
-def prune_in_background(root: Path, tap_max_age_s: float) -> None:
-    """Start a prune on a daemon thread unless one is already running."""
+def prune_in_background(root: Path, tap_max_age_s: float = TAP_MAX_AGE_S) -> None:
+    """Start a prune on a daemon thread unless one is already running. Counts as
+    the latest prune for `note_write`, so the startup prune is not followed by
+    another one 500 writes later."""
+    global _last_prune
     if not _running.acquire(blocking=False):
         return
+    with _guard:
+        _last_prune = time.monotonic()
 
     def run():
         try:
@@ -89,11 +105,14 @@ def prune_in_background(root: Path, tap_max_age_s: float) -> None:
 
 
 def note_write(spawn) -> None:
-    """Count one cache write; every PRUNE_EVERY writes, call `spawn()` (which
-    starts a prune)."""
-    global _writes
+    """Count one cache write; once PRUNE_EVERY writes have piled up and the last
+    prune is at least PRUNE_MIN_INTERVAL_S old, call `spawn()` (which starts one)."""
+    global _writes, _last_prune
     with _guard:
         _writes += 1
-        due = _writes % PRUNE_EVERY == 0
+        now = time.monotonic()
+        due = _writes >= PRUNE_EVERY and now - _last_prune >= PRUNE_MIN_INTERVAL_S
+        if due:
+            _writes, _last_prune = 0, now
     if due:
         spawn()

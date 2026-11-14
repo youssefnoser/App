@@ -55,8 +55,9 @@ def test_prune_without_cache_folders_is_harmless(tmp_path):
 def test_cap_comes_from_the_environment(monkeypatch):
     monkeypatch.setenv("SPHEREX_RENDER_CACHE_GB", "2.5")
     assert diskcache.cap_bytes() == 2_500_000_000
-    monkeypatch.setenv("SPHEREX_RENDER_CACHE_GB", "lots")
-    assert diskcache.cap_bytes() == int(diskcache.DEFAULT_CAP_GB * 1e9)
+    for bad in ("lots", "nan", "inf", "-inf"):
+        monkeypatch.setenv("SPHEREX_RENDER_CACHE_GB", bad)
+        assert diskcache.cap_bytes() == int(diskcache.DEFAULT_CAP_GB * 1e9)
 
 
 def test_touch_marks_a_file_as_recently_used(tmp_path):
@@ -68,11 +69,30 @@ def test_touch_marks_a_file_as_recently_used(tmp_path):
 
 def test_writes_trigger_a_prune_every_so_often(monkeypatch):
     runs = []
+    clock = [1000.0]
     monkeypatch.setattr(diskcache, "PRUNE_EVERY", 3)
+    monkeypatch.setattr(diskcache, "PRUNE_MIN_INTERVAL_S", 60.0)
     monkeypatch.setattr(diskcache, "_writes", 0)
+    monkeypatch.setattr(diskcache, "_last_prune", 0.0)
+    monkeypatch.setattr(diskcache.time, "monotonic", lambda: clock[0])
     for _ in range(7):
         diskcache.note_write(spawn=lambda: runs.append(1))
+    assert len(runs) == 1  # the second batch of 3 came within a minute
+    clock[0] += 61
+    for _ in range(3):
+        diskcache.note_write(spawn=lambda: runs.append(1))
     assert len(runs) == 2
+
+
+def test_a_started_prune_resets_the_interval(monkeypatch, tmp_path):
+    runs = []
+    monkeypatch.setattr(diskcache, "PRUNE_EVERY", 1)
+    monkeypatch.setattr(diskcache, "_writes", 0)
+    monkeypatch.setattr(diskcache, "_last_prune", float("-inf"))
+    monkeypatch.setattr(diskcache, "prune", lambda *a: None)
+    diskcache.prune_in_background(tmp_path)  # e.g. the one at server start
+    diskcache.note_write(spawn=lambda: runs.append(1))
+    assert runs == []
 
 
 def test_frame_cache_hit_counts_as_use(tmp_path, monkeypatch):

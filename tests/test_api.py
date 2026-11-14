@@ -670,3 +670,97 @@ def test_sequence_frame_failure_names_the_mirror(aws_client, monkeypatch, tmp_pa
     monkeypatch.setattr(app_module, "fetch_crop", broken)
     r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{SEQ}")
     assert "mirror" in r.json()["detail"] and "IRSA" not in r.json()["detail"]
+
+
+# --- review fixes: stack lookups, time spans, old cached metadata ---
+
+
+def one_stack(monkeypatch):
+    """Two members of one visit (the fixture file twice) around the patch centre."""
+    from server.irsa import Exposure
+
+    src = FIXTURES / "crop_barnard_D6_2026-03-19.fits"
+    monkeypatch.setattr(app_module, "cell_centre", lambda pix: (269.4463, 4.7677))
+    square = ((269.0, 4.0), (270.0, 4.0), (270.0, 5.5), (269.0, 5.5))
+    members = [Exposure(GOOD_URI, 61000.0, 6, "o", square),
+               Exposure("ibe/data/spherex/y.fits", 61000.1, 6, "o", square)]
+    monkeypatch.setattr(app_module, "_exposures_for_cell", lambda cell: members)
+    monkeypatch.setattr(app_module, "fetch_exposure", lambda uri: src)
+    return src
+
+
+def test_stack_list_failure_is_502_not_500(aws_client, monkeypatch):
+    def down(cell):
+        raise IrsaError("down")
+
+    monkeypatch.setattr(app_module, "_exposures_for_cell", down)
+    r = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}&stack={CELL}")
+    assert r.status_code == 502
+
+
+def test_cached_stack_frame_does_not_look_up_exposures(aws_client, monkeypatch):
+    one_stack(monkeypatch)
+    url = f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}&stack={CELL}"
+    assert aws_client.get(url).status_code == 200
+    monkeypatch.setattr(app_module, "_exposures_for_cell",
+                        lambda cell: pytest.fail("a cached frame must not ask for the list"))
+    assert aws_client.get(url).status_code == 200
+
+
+def test_stack_time_span_is_first_start_to_last_end(aws_client, monkeypatch):
+    from astropy.io import fits
+
+    src = one_stack(monkeypatch)
+    header = fits.getheader(src, "IMAGE")
+    r = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}&stack={CELL}")
+    meta = json.loads(r.headers["x-frame-meta"])
+    assert meta["mjd_start"] == pytest.approx(header["MJD-BEG"], abs=1e-6)
+    assert meta["mjd_end"] == pytest.approx(header["MJD-END"], abs=1e-6)
+    assert "mjd_first" not in meta and "mjd_last" not in meta
+
+
+def test_frame_cached_before_start_end_times_is_rendered_again(client, monkeypatch, tmp_path):
+    calls = patch_cutout(monkeypatch, FIXTURES / "crop_barnard_D6_2026-03-19.fits")
+    url = f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}"
+    client.get(url)
+    (meta_path,) = (tmp_path / "png").rglob("*.json")
+    old = json.loads(meta_path.read_text())
+    del old["mjd_start"], old["mjd_end"]
+    meta_path.write_text(json.dumps(old))
+    meta = json.loads(client.get(url).headers["x-frame-meta"])
+    assert "mjd_start" in meta
+    assert len(calls) == 2
+
+
+def test_grid_cached_before_start_end_times_is_fetched_again(aws_client, monkeypatch, tmp_path):
+    import numpy as np
+
+    _, asked = seq_setup(monkeypatch, tmp_path)
+    url = f"/api/frame.png?uri=ibe/data/spherex/s2.fits&{SEQ}&roll=0"
+    aws_client.get(url)
+    (npz,) = (tmp_path / "grids").rglob("*.npz")
+    with np.load(npz) as saved:
+        grid, wavelength = saved["grid"], saved["wavelength"]
+        meta = json.loads(str(saved["meta"]))
+    del meta["mjd_start"], meta["mjd_end"]
+    np.savez(npz.with_suffix(""), grid=grid, wavelength=wavelength, meta=json.dumps(meta))
+    app_module._grids.clear()
+    for png in (tmp_path / "png").rglob("*"):
+        if png.is_file():
+            png.unlink()
+    meta = json.loads(aws_client.get(url).headers["x-frame-meta"])
+    assert "mjd_start" in meta
+    assert len(asked) == 2
+
+
+def test_grid_memory_hit_counts_as_use(aws_client, monkeypatch, tmp_path):
+    import os
+    import time
+
+    seq_setup(monkeypatch, tmp_path)
+    app_module._seq_grid("ibe/data/spherex/s2.fits", 269.4463, 4.7677, 0.05)
+    (npz,) = (tmp_path / "grids").rglob("*.npz")
+    stamp = time.time() - 3600
+    os.utime(npz, (stamp, stamp))
+    app_module._seq_grid("ibe/data/spherex/s2.fits", 269.4463, 4.7677, 0.05)  # from memory
+    assert time.time() - npz.stat().st_mtime < 60
