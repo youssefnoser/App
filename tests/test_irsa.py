@@ -71,6 +71,31 @@ def test_decode_footprint_known():
     assert abs(corners[2][1] - 1.660075) < 1e-5
 
 
+def test_decode_footprint_drops_a_closing_point_off_by_rounding():
+    """A ring closed by a point a hair away from the first is still a quad: four
+    corners, as the wavelength lookup needs."""
+    import struct
+
+    data = bytearray(bytes.fromhex(HEX_WKB))
+    lon, lat = struct.unpack_from("<dd", data, 17)
+    struct.pack_into("<dd", data, 17 + 4 * 16, lon + 1e-12, lat - 1e-12)
+    assert len(decode_footprint(data.hex())) == 4
+
+
+def test_truncated_tap_response_skips_or_reports_the_bad_row():
+    lines = FIXTURE.read_text().splitlines()
+    # only the first field of the last row arrived: the others read as None
+    cut = "\n".join(lines[:3] + [lines[3].split(",")[0]]) + "\n"
+    assert len(parse_tap_csv(cut, skip_bad=True)) == 2
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=cut)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(IrsaError):
+            find_exposures(269.4463, 4.7677, client=client)
+
+
 def test_decode_footprint_rejects_big_endian():
     big_endian_hex = "00" + HEX_WKB[2:]
     with pytest.raises(ValueError):

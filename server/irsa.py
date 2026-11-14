@@ -59,7 +59,10 @@ def decode_footprint(hex_wkb: str) -> tuple[tuple[float, float], ...]:
         lon, lat = struct.unpack_from("<dd", data, offset)
         points.append((lon % 360.0, lat))
         offset += 16
-    if len(points) > 1 and points[0] == points[-1]:
+    # The ring repeats its first point to close; drop it, also when it differs
+    # from the first by rounding only (1e-9 deg is 4 micro-arcsec).
+    if len(points) > 1 and all(
+            abs(a - b) <= 1e-9 for a, b in zip(points[0], points[-1])):
         points = points[:-1]
     return tuple(points)
 
@@ -67,6 +70,11 @@ def decode_footprint(hex_wkb: str) -> tuple[tuple[float, float], ...]:
 def _obs_id(obs_publisher_did: str) -> str:
     """The obs id is the part of the publisher DID after '?', before '/'."""
     return obs_publisher_did.split("?", 1)[1].split("/", 1)[0]
+
+
+# What a malformed row raises. A row cut short (a truncated response) has its
+# missing fields read as None, hence TypeError and AttributeError.
+_BAD_ROW = (KeyError, ValueError, IndexError, TypeError, AttributeError, struct.error)
 
 
 def parse_tap_csv(text: str, skip_bad: bool = False) -> list[Exposure]:
@@ -88,7 +96,7 @@ def parse_tap_csv(text: str, skip_bad: bool = False) -> list[Exposure]:
                     footprint=decode_footprint(row["poly"]),
                 )
             )
-        except (KeyError, ValueError, IndexError, TypeError, struct.error):
+        except _BAD_ROW:
             if not skip_bad:
                 raise
     exposures.sort(key=lambda e: e.mjd)
@@ -117,7 +125,7 @@ def find_exposures(ra: float, dec: float, *, client: httpx.Client | None = None)
         return parse_tap_csv(response.text)
     except httpx.HTTPError as exc:
         raise IrsaError(f"IRSA TAP request failed: {exc}") from exc
-    except (KeyError, ValueError, IndexError, struct.error) as exc:
+    except _BAD_ROW as exc:
         raise IrsaError(f"IRSA TAP response could not be parsed: {exc!r}") from exc
     finally:
         if own_client:
