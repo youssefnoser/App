@@ -75,3 +75,22 @@ export function GoogleZoomOutIcon({ className = '', size = 18 }: { className?: s
     </svg>
   );
 }
+
+/**
+ * Stacked frames: shows or hides the SPHEREx frame sequence.
+ */
+export function FramesIcon({ className = '', size = 20 }: { className?: string; size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="currentColor"
+      aria-hidden="true"
+      className={className}
+      style={{ display: 'block' }}
+    >
+      <path d="M3 5H1v16c0 1.1.9 2 2 2h16v-2H3V5zm18-4H7c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V3c0-1.1-.9-2-2-2zm0 16H7V3h14v14z" />
+    </svg>
+  );
+}

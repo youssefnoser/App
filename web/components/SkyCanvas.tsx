@@ -28,7 +28,7 @@ type Props = {
   onStatus: (status: string) => void;
   onProgress: (progress: LoadProgress) => void;
   onView: (view: SkyView) => void;
-  infrared: boolean;
+  showFrames: boolean;
   grid: boolean;
   name: string;
   objectType: string;
@@ -60,7 +60,7 @@ export default function SkyCanvas({
   onStatus,
   onProgress,
   onView,
-  infrared,
+  showFrames,
   grid,
   name,
   objectType,
@@ -153,7 +153,7 @@ export default function SkyCanvas({
   useEffect(() => {
     backendRef.current?.setBands(sequenceWindows(bands, sequenceWavelength, sequenceWidth), backgroundFrame);
   }, [bandKey, sequenceWavelength, sequenceWidth, backgroundFrame, ready]);
-  useEffect(() => { backendRef.current?.setVisible(infrared); }, [infrared, ready]);
+  useEffect(() => { backendRef.current?.setVisible(showFrames); }, [showFrames, ready]);
   useEffect(() => {
     if (skyRef.current) skyRef.current.core.lines.equatorial.visible = grid;
   }, [grid, ready]);

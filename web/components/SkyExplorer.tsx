@@ -13,7 +13,7 @@ import Rotor from './Rotor';
 import ZoomRuler from './ZoomRuler';
 import SkyCanvas, { type SkyGoto, type SkyView } from './SkyCanvas';
 import ImageMath from './ImageMath';
-import { GoogleMyLocationIcon, GoogleLayersIcon } from './GoogleMapIcons';
+import { GoogleMyLocationIcon, GoogleLayersIcon, FramesIcon } from './GoogleMapIcons';
 
 function SpaceTargetIcon({ type }: { type: string }) {
   if (type.includes('BROWN DWARF')) {
@@ -140,7 +140,7 @@ export default function SkyExplorer() {
     setZoom((5 / 60) / view.fovDeg);
   }, []);
   const [frame, setFrame] = useState(0), [playing, setPlaying] = useState(false), [speed, setSpeed] = useState(1), [loop, setLoop] = useState(true);
-  const [infrared, setInfrared] = useState(true), [grid, setGrid] = useState(true), [bands, setBands] = useState<number[]>([22]);
+  const [showFrames, setShowFrames] = useState(true), [grid, setGrid] = useState(true), [bands, setBands] = useState<number[]>([22]);
   const [sequenceWavelength, setSequenceWavelength] = useState<number | undefined>(1.25);
   const [sequenceWidth, setSequenceWidth] = useState(.05);
   const [gaiaEnabled, setGaiaEnabled] = useState(false);
@@ -507,7 +507,7 @@ export default function SkyExplorer() {
         onStatus={setMessage}
         onProgress={setProgress}
         onView={onView}
-        infrared={infrared}
+        showFrames={showFrames}
         grid={grid}
         name={target?.name ?? lookup?.name ?? `${coordinates.ra.toFixed(4)}°, ${coordinates.dec >= 0 ? '+' : ''}${coordinates.dec.toFixed(4)}°`}
         objectType={target?.type ?? lookup?.type ?? 'CUSTOM COORDINATES'}
@@ -537,7 +537,6 @@ export default function SkyExplorer() {
             <div className="map-coordinate">ICRS <span>{readout.ra.toFixed(4)}°, {readout.dec >= 0 ? '+' : ''}{readout.dec.toFixed(4)}°</span></div>
           )}
         </div>
-        <div className="view-switch"><button className={infrared ? 'selected' : ''} onClick={() => setInfrared(true)}>Infrared</button><button className={!infrared ? 'selected' : ''} onClick={() => setInfrared(false)}>Visible</button></div>
       </div>
       <div className="map-tools">
         <button
@@ -546,6 +545,14 @@ export default function SkyExplorer() {
           onClick={() => flyTo({ ra: coordinates.ra, dec: coordinates.dec, fovDeg: 5 / 60, retry: true })}
         >
           <GoogleMyLocationIcon />
+        </button>
+        <button
+          aria-label="Show SPHEREx frames"
+          aria-pressed={showFrames}
+          title={showFrames ? 'Hide the SPHEREx frames to see the all-sky map' : 'Show the SPHEREx frames'}
+          onClick={() => setShowFrames(!showFrames)}
+        >
+          <FramesIcon />
         </button>
         <button aria-label="Toggle coordinate grid" aria-pressed={grid} title="Equatorial Grid" onClick={() => setGrid(!grid)}>
           <GoogleLayersIcon />
