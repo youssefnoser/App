@@ -7,7 +7,7 @@ import { Loader, priorityList } from './queue.js';
 import { PhotoCache } from './photos.js';
 import { toHash } from './state.js';
 import { buildSteps } from './timeline.js';
-import { frameBox, boxCovers, LOAD_FOV_DEG } from './viewbox.js';
+import { frameBox, boxCovers, boxInside, boxOnScreen, LOAD_FOV_DEG } from './viewbox.js';
 
 const DEG = 180 / Math.PI;
 export function frameAddress(sequence, uri, clean = false) {
@@ -39,9 +39,10 @@ export function createBackendSky(sky, {
   let loader;
   let disposed = false, generation = 0, request = null, animation = 0;
   let windows = [{wavelength:1.25,width:.05}], bandKey = '', lastRequest = null;
-  let view = null, steps = [], currentUri = null, previous = null, lastMove = 0;
+  let view = null, steps = [], currentUri = null, previous = null, lastMove = 0, settled = false;
   let visible = true, fill = true, upgrades = [], upgrading = 0, loadingPaused = false;
   const frames = new Map(), metadata = new Map(); // frames: key -> box; metadata: uri -> X-Frame-Meta
+  const boxes = new Map(); // cell -> {ra, dec, fov, bandKey}: every box asked for so far
   const report = (message) => { if (!disposed) onStatus(message); };
   function writeHash(index) {
     const centre = sky.viewCentre();
@@ -53,11 +54,42 @@ export function createBackendSky(sky, {
     for (const {photo} of photos.entries.values()) layer.remove(photo);
     photos = new PhotoCache(layer, {cap:600});
   }
+  // Loaded uris per box of the current bands, from the photos still in the cache.
+  function loadedByBox() {
+    const out = new Map();
+    for (const [key,entry] of photos.entries) {
+      const cell = Number(key.slice(0,key.indexOf('|')));
+      if (boxes.get(cell)?.bandKey !== bandKey) continue;
+      if (!out.has(cell)) out.set(cell,new Set());
+      out.get(cell).add(entry.uri);
+    }
+    return out;
+  }
+  // Uris that every loaded box on screen can show, so a blink step never leaves
+  // part of the view empty. A box with nothing loaded yet does not count, and a
+  // box wholly inside another box holding the uri is hidden behind it anyway.
+  function playableUris() {
+    const canvas = stel.canvas, centre = sky.viewCentre(), fov = sky.fovDeg();
+    const shown = [...loadedByBox()].filter(([cell])=>
+      boxOnScreen(boxes.get(cell),centre,fov,canvas.clientWidth,canvas.clientHeight));
+    const all = new Set(shown.flatMap(([,uris])=>[...uris]));
+    return new Set([...all].filter(uri=>shown.every(([cell,uris])=>uris.has(uri) ||
+      shown.some(([other,theirs])=>other!==cell && theirs.has(uri) && boxInside(boxes.get(cell),boxes.get(other))))));
+  }
+  // The loaded box of the current bands that holds the whole canvas and the most
+  // frames, if any: asking for it again costs nothing, every cache already has it.
+  function coveringBox(centre,fov,width,height) {
+    let best = null, most = 0;
+    for (const [cell,uris] of loadedByBox()) {
+      const box = boxes.get(cell);
+      if (uris.size > most && boxCovers(box,centre,fov,width,height)) {best = box; most = uris.size;}
+    }
+    return best;
+  }
   function notify() {
     if (disposed || !view) return;
-    // A step can be shown once any box holds a frame for it.
-    const loaded = new Set([...photos.entries.values()].map(entry=>entry.uri));
-    steps = buildSteps(view.exposures).filter(step=>loaded.has(step.uri)).map(step=>({...step,meta:metadata.get(step.uri) || null}));
+    const playable = playableUris();
+    steps = buildSteps(view.exposures).filter(step=>playable.has(step.uri)).map(step=>({...step,meta:metadata.get(step.uri) || null}));
     if (!steps.some(step=>step.uri===currentUri)) currentUri = steps[0]?.uri ?? null;
     const index = Math.max(0,steps.findIndex(step=>step.uri===currentUri));
     assets.pin(assetFor(currentUri));
@@ -104,7 +136,8 @@ export function createBackendSky(sky, {
       notify();pumpUpgrades();
     },onFailed:()=>{if(token===generation){notify();pumpUpgrades();}}});
   }
-  async function refresh(centre,fov,aspect=1) {
+  // `reuse`: a loaded box that covers the view, asked for instead of a new one.
+  async function refresh(centre,fov,aspect=1,reuse=null) {
     if (disposed) return;
     generation++;
     const token = generation;
@@ -118,8 +151,9 @@ export function createBackendSky(sky, {
     if (fov >= LOAD_FOV_DEG || !visible) {steps=[];view=null;onTimeline({steps:[],index:0});writeHash(0);report(visible ? 'Zoom in to load SPHEREx frames for this part of the sky.' : 'Showing the SPHEREx all-sky background.');return;}
     report('Finding SPHEREx exposures for the selected bands.');
     // aspect is the canvas diagonal divided by its short side.
-    const boxFov = frameBox(fov, Math.sqrt(Math.max(0, aspect * aspect - 1)), 1);
+    const boxFov = reuse ? reuse.fov : frameBox(fov, Math.sqrt(Math.max(0, aspect * aspect - 1)), 1);
     if (boxFov == null) {report('Zoom in to load SPHEREx frames for this part of the sky.');return;}
+    if (reuse) centre = {ra:reuse.ra, dec:reuse.dec};
     // The box being asked for. The settle check tests coverage against this one,
     // not the box still on screen, so it is requested once while it loads.
     lastRequest.box = {ra:centre.ra, dec:centre.dec, fov:boxFov};
@@ -140,6 +174,8 @@ export function createBackendSky(sky, {
       if(disposed || token!==generation) return;
       const first=answers[0];
       if (!first?.sequence || !Array.isArray(first.exposures)) throw Error('Invalid sequence response');
+      const {ra,dec,fov:side}=first.sequence;
+      boxes.set(first.cell,{ra,dec,fov:side,bandKey});
       const exposures=new Map();
       for(const answer of answers) for(const exposure of answer.exposures) {
         if(exposures.has(exposure.uri)) continue;
@@ -161,7 +197,7 @@ export function createBackendSky(sky, {
     const centre=sky.viewCentre(), fov=sky.fovDeg();
     const canvas=stel.canvas;
     const moved=!previous || Math.abs(centre.ra-previous.ra)>1e-6 || Math.abs(centre.dec-previous.dec)>1e-6 || Math.abs(fov-previous.fov)>1e-6;
-    if(moved) {previous={...centre,fov};lastMove=now;onView(centre);}
+    if(moved) {previous={...centre,fov};lastMove=now;settled=false;onView(centre);}
     // Leaving frame scale cancels the queue. Invalidate its coverage too, so a
     // quick return to the same box cannot mistake a cancelled queue for a live one.
     const paused = fov >= LOAD_FOV_DEG || !visible;
@@ -172,6 +208,8 @@ export function createBackendSky(sky, {
     if (!paused && loadingPaused) lastRequest=null;
     loadingPaused=paused;
     if(!moved && now-lastMove>=300) {
+      // Which boxes are on screen changed with the view: so may the shared steps.
+      if(!settled) {settled=true;notify();}
       const dx=lastRequest ? Math.abs(((centre.ra-lastRequest.ra+540)%360)-180)*Math.cos(centre.dec/DEG) : Infinity;
       const dy=lastRequest ? Math.abs(centre.dec-lastRequest.dec) : Infinity;
       const box=lastRequest?.box;
@@ -180,7 +218,7 @@ export function createBackendSky(sky, {
         : dx>.0125 || dy>.0125 || (lastRequest && Math.abs(fov/lastRequest.fov-1)>.1);
       if(!lastRequest || needsFrames) {
         const aspect=Math.hypot(canvas.clientWidth,canvas.clientHeight)/Math.max(1,Math.min(canvas.clientWidth,canvas.clientHeight));
-        refresh(centre,fov,aspect);
+        refresh(centre,fov,aspect,coveringBox(centre,fov,canvas.clientWidth,canvas.clientHeight));
       }
     }
     layer.visible=!paused;
