@@ -12,6 +12,50 @@ test bench page is kept for debugging against real data.
 SPHEREx photographs the whole sky every six months in 102 infrared bands. Comets, asteroids, nearby stars and brown dwarfs
 reveal themselves by shifting between images, and there is too much data for any one person. This tool makes the flipping easy.
 
+## Run
+
+First time? Do the [Setup](#setup) steps 1 to 4 once. Then:
+
+### Run the backend locally
+
+From the repo root:
+
+```bash
+uv run uvicorn server.app:app --reload --port 8000
+```
+
+It is ready when it prints `Application startup complete`. Check it at http://localhost:8000/health.
+Stop it with Ctrl+C.
+
+### Run the frontend (main app)
+
+Needs a backend: your local one above (with `web/.env.local` set to `http://127.0.0.1:8000`, Setup step 4) or the
+team's hosted one. In a second terminal:
+
+```bash
+cd web
+npm run dev
+```
+
+Open http://localhost:5173.
+
+For a production build instead: `npm run build && npm start` (same port).
+
+### Run the test UI (test bench)
+
+The test bench is served by the backend itself, so there is nothing extra to start: run the backend above and open
+http://localhost:8000.
+
+It needs the sky engine built once ([Setup](#setup) step 6). Without it the page opens but the sky view does not load.
+
+### Run the tests
+
+```bash
+uv run pytest -q          # backend, offline
+cd web && npm test        # frontend: shared modules and unit tests
+cd web && npm run check   # TypeScript type-check
+```
+
 ## Setup
 
 ### What you need
@@ -58,23 +102,9 @@ To use the team's hosted backend instead, run `cp web/.env.example web/.env.loca
 
 ### 5. Run it
 
-In one terminal, from the repo root:
-
-```bash
-uv run uvicorn server.app:app --reload --port 8000
-```
-
-In a second terminal:
-
-```bash
-cd web
-npm run dev
-```
-
-Open http://localhost:5173 and pick a target, for example Barnard's Star.
-
-The first view of a patch is slow. The backend downloads whole exposure files from the SPHEREx mirror on AWS (no account
-needed), cuts them, and caches the results under `.cache/`. Later views of the same patch are quick.
+See [Run](#run). The first view of a patch is slow: the backend downloads whole exposure files from the SPHEREx
+mirror on AWS (no account needed), cuts them, and caches the results under `.cache/`. Later views of the same patch
+are quick.
 
 ### 6. Optional: build the sky engine for the test bench
 
@@ -114,15 +144,9 @@ builds the same list from IRSA instead. After a new data release, re-run the scr
 
 ### Tests
 
-```bash
-uv run pytest -q          # backend, offline
-cd web && npm test        # frontend: shared modules and unit tests
-cd web && npm run check   # TypeScript type-check
-```
-
-The frontend unit tests are TypeScript run directly by Node, which needs a Node build with type stripping
-(`node --experimental-strip-types`). Some Linux distribution packages leave it out; if they fail with
-`ERR_NO_TYPESCRIPT`, install Node from nodejs.org or with nvm.
+The commands are under [Run the tests](#run-the-tests). The frontend unit tests are TypeScript run directly by Node,
+which needs a Node build with type stripping (`node --experimental-strip-types`). Some Linux distribution packages
+leave it out; if they fail with `ERR_NO_TYPESCRIPT`, install Node from nodejs.org or with nvm.
 
 ## Layout
 
