@@ -8,10 +8,13 @@ mounted only if its directory exists, so the app imports without a vendor build.
 """
 
 import hashlib
+import io
 import json
 import os
 import tempfile
+import threading
 import warnings
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -28,6 +31,7 @@ from server.catalog import catalog
 from server.cutouts import CutoutError, cache_dir, check_uri, fetch_cutout
 from server.irsa import Exposure, IrsaError, find_exposures
 from server.mirror import fetch_exposure, open_frame, prefetch
+from server.ranges import fetch_crop
 from server.patches import (
     CROP_DEG,
     NPIX,
@@ -42,7 +46,7 @@ from server.patches import (
 from server.pixels import science_image
 from server.render import to_png
 from server.targets import TARGETS, propagate
-from server.reproject import resample_north_up, wavelength_at
+from server.reproject import SCALE_ARCSEC, resample_north_up, wavelength_at
 from server.timeline import first_batch, group_visits
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -347,6 +351,197 @@ def patch_frame(
         raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
     except CutoutError as err:
         raise HTTPException(502, "The SPHEREx archive (IRSA) did not return this frame. Try again.") from err
+    return Response(
+        png,
+        media_type="image/png",
+        headers={"X-Frame-Meta": json.dumps(meta), "Cache-Control": "public, max-age=86400"},
+    )
+
+
+# ---------------------------------------------------------------- live sequence
+#
+# One image per exposure for a fixed sky box, read from the mirror by byte ranges
+# (server/ranges.py). The page treats the box as a single patch, so its queue,
+# blink and photo code are the same as for the patch grid.
+
+SEQ_MIN_FOV, SEQ_MAX_FOV = 0.05, 0.5
+SEQ_MAX_ROLL = 4
+_grids: dict[tuple, tuple] = {}
+_grids_guard = threading.Lock()
+MAX_GRIDS = 600
+
+
+def _seq_pix(ra: float, dec: float, fov: float, detector: int) -> int:
+    """The page's patch number for one sequence box: negative, so it can never be a
+    real HEALPix patch, and different for every box so cached photos do not mix."""
+    return -1 - zlib.crc32(f"{ra}|{dec}|{fov}|{detector}".encode()) % 2_000_000_000
+
+
+def _seq_size(fov: float) -> int:
+    """Side of the sequence image in pixels at the patch grid's 3.075 arcsec scale."""
+    return int(round(fov * 3600.0 / SCALE_ARCSEC))
+
+
+_grid_locks: dict[tuple, threading.Lock] = {}
+
+
+def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
+    """(north-up grid, wavelength, metadata) of one exposure for the box.
+
+    Kept in memory and on disk (cache_dir()/grids), so the neighbours a rolling
+    median needs are fetched from the mirror once, whichever server worker asks,
+    and two requests for the same exposure share one fetch.
+    """
+    key = (uri, ra, dec, fov)
+    with _grids_guard:
+        hit = _grids.pop(key, None)
+        if hit is not None:
+            _grids[key] = hit
+            return hit
+        lock = _grid_locks.setdefault(key, threading.Lock())
+    name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}".encode()).hexdigest()
+    path = cache_dir() / "grids" / f"v{RENDER_VERSION}" / name[:2] / f"{name}.npz"
+    with lock:
+        with _grids_guard:
+            hit = _grids.get(key)
+        if hit is not None:
+            return hit
+        try:
+            with np.load(path) as saved:
+                out = (saved["grid"], float(saved["wavelength"]), json.loads(str(saved["meta"])))
+        except (OSError, ValueError, KeyError):
+            with fetch_crop(uri, ra, dec, fov) as hdul, warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # SIP without -SIP CTYPE; applying it is intended
+                header = hdul["IMAGE"].header
+                grid = resample_north_up(
+                    science_image(hdul), WCS(header), ra, dec, _seq_size(fov))
+                wavelength_um, _ = wavelength_at(hdul, ra, dec)
+                meta = {"mjd": float(header["MJD-AVG"]), "detector": int(header["DETECTOR"]),
+                        "obs_id": str(header["OBSID"])}
+            out = (grid, wavelength_um, meta)
+            buffer = io.BytesIO()
+            np.savez(buffer, grid=grid, wavelength=wavelength_um, meta=json.dumps(meta))
+            _write_atomic(path, buffer.getvalue())
+        with _grids_guard:
+            _grids[key] = out
+            _grid_locks.pop(key, None)
+            while len(_grids) > MAX_GRIDS:
+                _grids.pop(next(iter(_grids)))
+    return out
+
+
+def _sequence(ra: float, dec: float, detector: int) -> list[tuple[Exposure, int]]:
+    """(exposure, visit index) for every exposure of `detector` whose footprint holds
+    the point, in time order."""
+    out = []
+    for index, visit in enumerate(group_visits(_exposures_for_cell(cell_of(ra, dec)))):
+        out += [(e, index) for e in visit
+                if e.detector == detector and footprint_contains(e.footprint, ra, dec)]
+    return out
+
+
+@app.get("/api/sequence")
+def sequence(
+    ra: float = Query(ge=0, lt=360),
+    dec: float = Query(ge=-90, le=90),
+    fov: float = Query(ge=SEQ_MIN_FOV, le=SEQ_MAX_FOV),
+    detector: int = Query(ge=1, le=6),
+) -> dict:
+    """The time sequence of one detector at a point, shaped like `/api/view` with a
+    single patch. `first` marks the first, middle and last exposure of each visit:
+    the page loads those before the rest, so a blink across the whole time span is
+    possible after a few frames."""
+    ra, dec, fov = round(ra, 5), round(dec, 5), round(fov, 3)
+    try:
+        items = _sequence(ra, dec, detector)
+    except IrsaError as err:
+        raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
+    by_visit: dict[int, list[Exposure]] = {}
+    for e, visit in items:
+        by_visit.setdefault(visit, []).append(e)
+    coarse = set()
+    for members in by_visit.values():
+        coarse.update(m.uri for m in (members[0], members[len(members) // 2], members[-1]))
+    pix = _seq_pix(ra, dec, fov, detector)
+    return {
+        "cell": pix,
+        "sequence": {"ra": ra, "dec": dec, "fov": fov, "detector": detector,
+                     "pixels": _seq_size(fov)},
+        "cells": [{"pix": pix, "ra": ra, "dec": dec, "ring": 0}],
+        "exposures": [
+            {"uri": e.uri, "obs_id": e.obs_id, "mjd": e.mjd,
+             "date": Time(e.mjd, format="mjd").iso[:10], "detector": e.detector,
+             "visit": visit, "first": e.uri in coarse, "cells": [pix]}
+            for e, visit in items
+        ],
+    }
+
+
+def _render_sequence_frame(uri: str, ra: float, dec: float, fov: float, roll: int):
+    """One sequence image: the exposure itself (`roll=0`) or the NaN-ignoring median
+    of it and up to `roll` exposures either side from the same visit and detector.
+    Neighbours that fail or miss the box are left out; the exposure itself must work."""
+    grid, wavelength_um, meta = _seq_grid(uri, ra, dec, fov)
+    if roll == 0:
+        return to_png(grid), {**meta, "wavelength_um": wavelength_um}
+    items = _sequence(ra, dec, meta["detector"])
+    uris = [e.uri for e, _ in items]
+    grids, waves = [grid], [wavelength_um]
+    if uri in uris:
+        at = uris.index(uri)
+        visit = items[at][1]
+        near = [e.uri for e, v in items[max(at - roll, 0):at + roll + 1]
+                if v == visit and e.uri != uri]
+
+        def one(other: str):
+            try:
+                return _seq_grid(other, ra, dec, fov)
+            except CutoutError:
+                return None
+
+        with ThreadPoolExecutor(8) as pool:
+            for result in pool.map(one, near):
+                if result is not None:
+                    grids.append(result[0])
+                    waves.append(result[1])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pixels stay NaN
+        median = np.nanmedian(np.stack(grids), axis=0).astype(np.float32)
+    return to_png(median), {**meta, "wavelength_um": float(np.median(waves)),
+                            "stack": len(grids)}
+
+
+@app.get("/api/frame.png")
+def sequence_frame(
+    uri: str = Query(),
+    ra: float = Query(ge=0, lt=360),
+    dec: float = Query(ge=-90, le=90),
+    fov: float = Query(ge=SEQ_MIN_FOV, le=SEQ_MAX_FOV),
+    roll: int = Query(2, ge=0, le=SEQ_MAX_ROLL),
+) -> Response:
+    try:
+        check_uri(uri)
+    except ValueError as err:
+        raise HTTPException(422, "That is not a SPHEREx file path.") from err
+    ra, dec, fov = round(ra, 5), round(dec, 5), round(fov, 3)
+    name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}|{roll}".encode()).hexdigest()
+    base = cache_dir() / "png" / f"v{RENDER_VERSION}-seq" / name[:2] / name
+    png_path, meta_path = base.with_suffix(".png"), base.with_suffix(".json")
+    try:
+        png, meta = png_path.read_bytes(), json.loads(meta_path.read_text())
+    except (OSError, ValueError):
+        try:
+            png, meta = _render_sequence_frame(uri, ra, dec, fov, roll)
+        except IrsaError as err:
+            raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
+        except CutoutError as err:
+            raise HTTPException(
+                502, "The SPHEREx archive (IRSA) did not return this frame. Try again.") from err
+        except Exception as err:  # a file the pipeline cannot read
+            raise HTTPException(
+                502, "The SPHEREx archive (IRSA) returned a frame that could not be drawn.") from err
+        _write_atomic(meta_path, json.dumps(meta).encode())
+        _write_atomic(png_path, png)
     return Response(
         png,
         media_type="image/png",
