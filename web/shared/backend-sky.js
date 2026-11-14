@@ -35,10 +35,13 @@ export function createBackendSky(stel, {
 } = {}) {
   const layer = stel.createLayer({id:'spherex-frames', z:7, visible:true});
   let photos = new PhotoCache(layer, {cap:600});
+  // The previous box's photos stay on screen while a new box loads, as in the
+  // test bench; they go once the new box can show the current step (swapIn).
+  let oldPhotos = null, swapped = true;
   const applied = new Map();
   const assets = createFrameAssets({fetchFn,onEvict:address=>{
-    for(const [key,entry] of photos.entries) if(entry.assetKey===address) {
-      layer.remove(entry.photo);photos.entries.delete(key);
+    for(const cache of [photos,oldPhotos]) if(cache) for(const [key,entry] of cache.entries) if(entry.assetKey===address) {
+      layer.remove(entry.photo);cache.entries.delete(key);
     }
   }});
   const assetFor = uri => applied.get(uri) || (frames.has(uri) ? frameAddress(frames.get(uri),uri) : null);
@@ -55,14 +58,45 @@ export function createBackendSky(stel, {
     const hash = toHash({...centre,fov:stel.core.fov*DEG,step:index});
     if (location.hash.slice(1) !== hash) history.replaceState(null,'',`#${hash}`);
   }
+  function removeAll(cache) {
+    cache.showOnly(null);
+    for (const {photo} of cache.entries.values()) layer.remove(photo);
+  }
   function clearPhotos() {
-    photos.showOnly(null);
-    for (const {photo} of photos.entries.values()) layer.remove(photo);
+    removeAll(photos);
     photos = new PhotoCache(layer, {cap:600});
+    if (oldPhotos) removeAll(oldPhotos);
+    oldPhotos = null; swapped = true;
+  }
+  // Keep what is on screen and start an empty cache for the new box.
+  function retirePhotos() {
+    if (photos.size) {
+      if (oldPhotos) removeAll(oldPhotos);
+      oldPhotos = photos;
+      photos = new PhotoCache(layer, {cap:600});
+    }
+    swapped = !oldPhotos;
+  }
+  // The new box replaces the old one once it has the current step, or as soon
+  // as it has anything when that step is not in the new box, or when it is done.
+  function readyToSwap(loaded) {
+    const {done,failed,total} = loader.stats;
+    if (done + failed >= total) return true;
+    return view.exposures.some(e=>e.uri===currentUri) ? loaded.has(currentUri) : loaded.size > 0;
   }
   function notify() {
     if (disposed || !view) return;
     const loaded = new Set([...loader.done.values()].map(item=>item.uri));
+    if (!swapped) {
+      if (!readyToSwap(loaded)) {
+        const {done,total} = loader.stats;
+        report(`Loading SPHEREx frames: ${done} of ${total}.`);
+        return;
+      }
+      swapped = true;
+      if (oldPhotos) removeAll(oldPhotos);
+      oldPhotos = null;
+    }
     steps = buildSteps(view.exposures).filter(step=>loaded.has(step.uri)).map(step=>({...step,meta:metadata.get(step.uri) || null}));
     if (!steps.some(step=>step.uri===currentUri)) currentUri = steps[0]?.uri ?? null;
     const index = Math.max(0,steps.findIndex(step=>step.uri===currentUri));
@@ -117,16 +151,20 @@ export function createBackendSky(stel, {
     request?.abort(); loader?.setQueue([]);
     request = new AbortController();
     const signal = request.signal;
-    upgrades=[]; frames.clear(); metadata.clear(); applied.clear(); clearPhotos();
-    steps=[];view=null;currentUri=null;
-    onTimeline({steps:[],index:0});
+    upgrades=[]; frames.clear(); metadata.clear(); applied.clear();
+    view=null;
     lastRequest = {...centre,fov};
-    writeHash(0);
-    if (fov >= LOAD_FOV_DEG || !visible) {report(visible ? 'Zoom in to load SPHEREx frames for this part of the sky.' : 'Showing the SPHEREx all-sky background.');return;}
-    report('Finding SPHEREx exposures for the selected bands.');
     // aspect is the canvas diagonal divided by its short side.
-    const boxFov = frameBox(fov, Math.sqrt(Math.max(0, aspect * aspect - 1)), 1);
-    if (boxFov == null) {report('Zoom in to load SPHEREx frames for this part of the sky.');return;}
+    const boxFov = fov >= LOAD_FOV_DEG || !visible ? null : frameBox(fov, Math.sqrt(Math.max(0, aspect * aspect - 1)), 1);
+    if (boxFov == null) {
+      clearPhotos(); steps=[]; currentUri=null;
+      onTimeline({steps:[],index:0});
+      writeHash(0);
+      report(visible ? 'Zoom in to load SPHEREx frames for this part of the sky.' : 'Showing the SPHEREx all-sky background.');
+      return;
+    }
+    retirePhotos();
+    report('Finding SPHEREx exposures for the selected bands.');
     try {
       // Four metadata queries at a time; crop downloads use the original cap of eight.
       const answers = new Array(windows.length);
@@ -192,7 +230,9 @@ export function createBackendSky(stel, {
     // Otherwise the old sharp frame is drawn as a rectangle over the survey.
     const coversView = !view?.sequence || !canvas ||
       boxCovers(view.sequence,centre,fov,canvas.clientWidth,canvas.clientHeight);
-    layer.visible=!paused && coversView;
+    // Like the test bench, frames stay drawn while the view moves past the box;
+    // hiding them here snapped the view to the blurry survey on every pan or zoom.
+    layer.visible=!paused;
     if (!paused && !coversView && moved) report('Updating SPHEREx frames for this view.');
     animation=schedule(tick);
   }
@@ -246,6 +286,7 @@ export function createBackendSky(stel, {
         }).catch(()=>{});
       }
       photos.showOnly(visible?currentUri:null);
+      oldPhotos?.showOnly(visible?currentUri:null);
       writeHash(index);
     },
     retry() {lastRequest=null;},

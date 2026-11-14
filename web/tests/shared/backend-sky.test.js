@@ -180,7 +180,7 @@ test('zooming briefly past the frame threshold resumes every pending batch on re
 });
 
 
-test('a frame box that no longer covers the canvas is hidden during pan and zoom', async () => {
+test('frames stay drawn while the view pans or zooms past the loaded box, like the test bench', async () => {
  let tick;
  const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
  const stel={canvas:{clientWidth:1600,clientHeight:800},core:{fov:.1*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
@@ -189,10 +189,51 @@ test('a frame box that no longer covers the canvas is hidden during pan and zoom
  tick(0);assert.equal(layer.visible,true);
  // Drag outside the box, before the 300 ms settle timer can request a new one.
  stel.core.observer.pitch=.1*Math.PI/180;
- tick(10);assert.equal(layer.visible,false,'must not expose the old frame edge over the survey');
+ tick(10);assert.equal(layer.visible,true,'hiding the frames here is the snap to the blurry survey');
  stel.core.observer.pitch=0;
- tick(20);assert.equal(layer.visible,true);
  stel.core.fov=.2*Math.PI/180;
- tick(30);assert.equal(layer.visible,false,'zooming out must not expose the old frame border');
+ tick(20);assert.equal(layer.visible,true,'a small zoom-out must not hide the frames either');
+ // Past the frame scale nothing loads, so the layer goes, as in the test bench.
+ stel.core.fov=1*Math.PI/180;
+ tick(30);assert.equal(layer.visible,false);
+ controller.destroy();
+});
+
+
+test('a reload for a new box keeps the old frames and the current step until that step arrives', async () => {
+ const added=[],removed=[],timelines=[];
+ let releaseTwo;
+ const layer={visible:true,add:(_type,args)=>{const p={...args};added.push(p);return p;},remove:p=>removed.push(p)};
+ const stel={core:{fov:.15*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const exposures=[{uri:'one',mjd:1,date:'2025-01-01',detector:2,first:true},{uri:'two',mjd:2,date:'2025-02-01',detector:2,first:true}];
+ const box=(cell,ra)=>({cell,sequence:{ra,dec:0,fov:.2},cells:[{pix:cell,ra,dec:0,ring:0}],exposures:exposures.map(e=>({...e,cells:[cell]}))});
+ const fetchFn=async(url)=>{
+   url=String(url);
+   if(url.includes('/sequence')) return Response.json(Number(new URL(url,'http://x').searchParams.get('ra'))<50 ? box(-1,30) : box(-2,60));
+   if(url.includes('ra=60') && url.includes('uri=two')) await new Promise(resolve=>{releaseTwo=resolve;});
+   return new Response(new Uint8Array([1]));
+ };
+ const controller=createBackendSky(stel,{fetchFn,onTimeline:t=>timelines.push(t),schedule:()=>0,cancel:()=>{}});
+ controller.setFill(false);
+ await controller.refresh({ra:30,dec:0},.15);
+ await new Promise(resolve=>setTimeout(resolve,20));
+ controller.showFrame(1);
+ const oldTwo=added.find(p=>p.visible && p.calibration.ra===30);
+ assert(oldTwo,'step two of the first box is on screen');
+ const before=timelines.length;
+
+ await controller.refresh({ra:60,dec:0},.15);
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert(!timelines.slice(before).some(t=>t.steps.length===0),'the timeline must not be emptied while reloading');
+ assert.equal(oldTwo.visible,true,'the old frame stays on screen until its replacement arrives');
+ assert(!removed.includes(oldTwo));
+
+ releaseTwo();
+ await new Promise(resolve=>setTimeout(resolve,20));
+ const newTwo=added.find(p=>p.visible && p.calibration.ra===60);
+ assert(newTwo,'the new frame for the same step is shown');
+ assert(removed.includes(oldTwo),'the old frame is removed once replaced');
+ const last=timelines.at(-1);
+ assert.equal(last.steps[last.index].uri,'two','the time step is kept');
  controller.destroy();
 });
