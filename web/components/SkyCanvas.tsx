@@ -2,6 +2,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createBackendSky, pointSky, readSkyCentre, HIPS, type BackendTimeline } from '@/shared/backend-sky.js';
 import { sequenceWindows } from '@/lib/backend-bands';
+import { projectSkyToScreen } from '@/lib/projection';
+import GaiaOverlay from './GaiaOverlay';
+import type { GaiaSource } from '@/shared/gaia.js';
 
 // A zoom the page asks for (zoom buttons, URL, recenter). `id` changes on every
 // request so asking for the same fov twice still applies it.
@@ -25,6 +28,8 @@ type Props = {
   objectType: string;
   coordinates?: { ra: number; dec: number };
   gaiaEnabled?: boolean;
+  gaiaSources?: GaiaSource[];
+  onRecentre?: (ra: number, dec: number) => void;
   wiseEnabled?: boolean;
   recenterTrigger?: number;
   onCoordinatesChange?: (coords: { ra: number; dec: number }) => void;
@@ -60,64 +65,6 @@ function loadEngineScript(): Promise<any> {
   return engineScriptPromise;
 }
 
-function projectSkyToScreen(
-  stel: any,
-  raDeg: number,
-  decDeg: number,
-  width: number,
-  height: number
-): { x: number; y: number; visible: boolean } | null {
-  if (!stel?.core?.observer) return null;
-
-  try {
-    const astrom = stel.s2c(raDeg * Math.PI / 180, decDeg * Math.PI / 180);
-    const [cx, cy, cz] = stel.convertFrame(stel.observer, 'ASTROM', 'CIRS', astrom);
-
-    const yaw = stel.core.observer.yaw;
-    const pitch = stel.core.observer.pitch;
-    if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) return null;
-
-    // Pure JavaScript 3D rotation matrix from ICRF to camera VIEW frame
-    // Rot_Z(-yaw) -> Rot_Y(pitch) -> R2GL coordinate mapping
-    const cosYaw = Math.cos(-yaw), sinYaw = Math.sin(-yaw);
-    const x1 = cosYaw * cx - sinYaw * cy;
-    const y1 = sinYaw * cx + cosYaw * cy;
-    const z1 = cz;
-
-    const cosPitch = Math.cos(pitch), sinPitch = Math.sin(pitch);
-    const x2 = cosPitch * x1 + sinPitch * z1;
-    const y2 = y1;
-    const z2 = -sinPitch * x1 + cosPitch * z1;
-
-    const vx = -y2;
-    const vy = z2;
-    const vz = -x2;
-
-    // In VIEW frame: camera looks down along -Z (depth is -vz).
-    // If vz >= -0.0001, the celestial point is behind the camera.
-    if (vz >= -0.0001) {
-      return { x: -9999, y: -9999, visible: false };
-    }
-
-    const aspect = width / height;
-    const fov = stel.core.fov || (50 * Math.PI) / 180;
-    const fovy = aspect < 1 ? 2 * Math.atan(Math.tan(fov / 2) / aspect) : fov;
-    const f = 1 / Math.tan(fovy / 2);
-
-    const depth = -vz;
-    const xNdc = (vx / depth) * (f / aspect);
-    const yNdc = (vy / depth) * f;
-
-    const screenX = ((xNdc + 1) / 2) * width;
-    const screenY = ((-yNdc + 1) / 2) * height;
-
-    const visible = screenX >= -250 && screenX <= width + 250 && screenY >= -250 && screenY <= height + 250;
-    return { x: screenX, y: screenY, visible };
-  } catch {
-    return null;
-  }
-}
-
 export default function SkyCanvas({
   fovRequest,
   onFov,
@@ -135,6 +82,8 @@ export default function SkyCanvas({
   objectType,
   coordinates = { ra: 269.4521, dec: 4.6934 },
   gaiaEnabled = false,
+  gaiaSources = [],
+  onRecentre,
   wiseEnabled = false,
   recenterTrigger,
   onCoordinatesChange,
@@ -173,6 +122,7 @@ export default function SkyCanvas({
   const isUserDragging = useRef(false);
   const animFrameRef = useRef<number | null>(null);
   const lastTargetCoords = useRef({ ra: -999, dec: -999 });
+  const [viewTick, setViewTick] = useState(0);
 
   const updateReticlePosition = useCallback(() => {
     const stel = stelRef.current;
@@ -183,6 +133,7 @@ export default function SkyCanvas({
     if (pos) {
       setReticlePos(pos);
     }
+    setViewTick(tick => tick + 1); // re-project the Gaia markers too
   }, []);
 
   const pointToTarget = (stel: any, coords: { ra: number; dec: number }) => {
@@ -478,22 +429,16 @@ export default function SkyCanvas({
           <small>Follow the star. See the difference.</small>
         </div>
       </div>
-      {gaiaEnabled && (
-        <div
-          className="catalog-pin gaia-pin"
-          style={{
-            left: labelX - 52 * markerScale,
-            top: labelY - 42 * markerScale,
-            display: isVisible ? 'flex' : 'none',
-            transformOrigin: 'center center',
-            transform: `scale(${markerScale.toFixed(3)})`,
-            transition: isUserDragging.current ? 'none' : 'transform 0.18s ease-out',
-          }}
-          title="Gaia DR3 Optical Astrometry Counterpart"
-        >
-          <span className="catalog-pin-dot gaia-dot" />
-          <span className="catalog-pin-text">Gaia DR3</span>
-        </div>
+      {gaiaEnabled && gaiaSources.length > 0 && (
+        <GaiaOverlay
+          stel={stelRef.current}
+          width={size.width > 1 ? size.width : sizeRef.current.width}
+          height={size.height > 1 ? size.height : sizeRef.current.height}
+          viewTick={viewTick}
+          sources={gaiaSources}
+          observationMjd={observationMjd}
+          onRecentre={(ra, dec) => onRecentre?.(ra, dec)}
+        />
       )}
       {wiseEnabled && (
         <div

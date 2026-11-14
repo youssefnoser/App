@@ -700,6 +700,51 @@ body:not(.nav-collapsed) .search-dock.is-searching,
 }
 
 .gaia-pin { border-color: rgba(56, 189, 248, 0.6); }
+
+/* Gaia DR3 overlay (components/GaiaOverlay.tsx). No blur or filter: they cost a
+   full-canvas repaint on every pan. */
+.gaia-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.gaia-arrows {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.gaia-arrows line {
+  stroke: #fbbf24;
+  stroke-width: 1.6;
+}
+.gaia-arrows marker path { fill: #fbbf24; }
+.gaia-marker {
+  position: absolute;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(56, 189, 248, 0.85);
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.gaia-marker.gaia-fast { border-color: #fbbf24; border-width: 2px; }
+.gaia-marker:hover,
+.gaia-marker:focus-visible { border-color: #f8fafc; outline: none; }
+.gaia-tooltip {
+  position: absolute;
+  z-index: 5;
+  max-width: 250px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.gaia-tooltip div:first-child { font-weight: 700; color: #f8fafc; }
 .wise-pin { border-color: rgba(192, 132, 252, 0.6); }
 
 /* Quick toggle buttons in map tools */
@@ -2830,4 +2875,20 @@ html, body, main, .sky {
 .search-dock,
 .search-dock * {
   backdrop-filter: none !important;
+}
+
+/* Lookup failures under the search box (SkyExplorer searchError). */
+.search-error {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 56px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  color: #fde68a;
+  font-size: 12px;
+  line-height: 1.4;
 }

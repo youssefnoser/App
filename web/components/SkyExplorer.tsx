@@ -7,6 +7,8 @@ import type { BackendTimeline } from '@/shared/backend-sky.js';
 import BandSelector from './BandSelector';
 import { getBandWavelength } from '@/lib/spectral';
 import { resolveQuery } from '@/lib/resolve';
+import { needsRefetch, type Cone } from '@/lib/gaiaFetch';
+import type { GaiaSource } from '@/shared/gaia.js';
 import Rotor from './Rotor';
 import SkyCanvas, { type FovRequest } from './SkyCanvas';
 import ImageMath from './ImageMath';
@@ -149,6 +151,10 @@ export default function SkyExplorer() {
   // Name and type of an object found through Sesame or Gaia (not a built-in target).
   const [lookup, setLookup] = useState<{ name: string; type: string } | null>(null);
   const lookupTicket = useRef(0);
+  // A failed lookup stays under the search box: the status bar is soon overwritten by frame loading.
+  const [searchError, setSearchError] = useState('');
+  const [gaiaSources, setGaiaSources] = useState<GaiaSource[]>([]);
+  const gaiaCone = useRef<Cone | null>(null);
   const [wiseEnabled, setWiseEnabled] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [bandsOpen, setBandsOpen] = useState(false);
@@ -180,6 +186,33 @@ export default function SkyExplorer() {
     return () => clearInterval(timer);
   }, [playing, loop, speed, frameCount]);
   useEffect(() => { if (playing && frame === lastFrame && !loop) setPlaying(false); }, [frame, loop, playing, lastFrame]);
+
+  // Gaia overlay: ask /api/gaia 400 ms after the view settles, and only when the view
+  // has left the last cone (or needs a different radius). Cleared when switched off.
+  useEffect(() => {
+    if (!gaiaEnabled) {
+      setGaiaSources([]);
+      gaiaCone.current = null;
+      return;
+    }
+    const view = { ra: viewCoordinates.ra, dec: viewCoordinates.dec, fov: fovDeg };
+    if (!needsRefetch(gaiaCone.current, view)) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      const url = `/api/gaia?ra=${view.ra.toFixed(5)}&dec=${view.dec.toFixed(5)}&fov=${Math.min(2, Math.max(0.01, view.fov)).toFixed(4)}`;
+      cachedFetch(url, { signal: controller.signal }).then(async response => {
+        if (!response.ok) throw new Error(`gaia ${response.status}`);
+        const body = await response.json();
+        gaiaCone.current = { ra: body.ra, dec: body.dec, radius: body.radius };
+        setGaiaSources(body.sources);
+      }).catch(error => {
+        if (controller.signal.aborted) return;
+        console.warn(error);
+        setMessage('Gaia stars could not be loaded. They will load again when you move the view.');
+      });
+    }, 400);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [gaiaEnabled, viewCoordinates.ra, viewCoordinates.dec, fovDeg]);
   const onBands = useCallback((next: number[]) => { setBands(next); setSequenceWavelength(undefined); }, []);
   const onWavelength = useCallback((value: number) => {
     const nearest = Array.from({length:102}, (_, i) => i + 1).reduce((a, b) =>
@@ -301,8 +334,11 @@ export default function SkyExplorer() {
       if (ticket !== lookupTicket.current) return; // a newer search replaced this one
       if (!result.ok) {
         setMessage(result.message);
+        setSearchError(result.message);
+        setSearchOpen(false);
         return;
       }
+      setSearchError('');
       setSelected(-1);
       setLookup({ name: result.name, type: result.type });
       updateCoordinates(result.ra, result.dec);
@@ -328,13 +364,14 @@ export default function SkyExplorer() {
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
         </span>
-        <input ref={searchInput} aria-label="Search celestial objects" aria-expanded={searchOpen} aria-controls="sky-search-options" placeholder="Search the sky…" value={query} onFocus={() => setSearchOpen(true)} onClick={() => setSearchOpen(true)} onChange={event => { setQuery(event.target.value); setSearchOpen(true); }} />
+        <input ref={searchInput} aria-label="Search celestial objects" aria-expanded={searchOpen} aria-controls="sky-search-options" placeholder="Search the sky…" value={query} onFocus={() => setSearchOpen(true)} onClick={() => setSearchOpen(true)} onChange={event => { setQuery(event.target.value); setSearchOpen(true); setSearchError(''); }} />
         {query && (
           <button type="button" className="search-clear-btn" aria-label="Clear search input" onClick={() => { setQuery(''); searchInput.current?.focus(); }}>
             ✕
           </button>
         )}
       </form>
+      {searchError && <p className="search-error" role="status">{searchError}</p>}
       <div id="sky-search-options" className="search-options" hidden={!searchOpen}>
         {history.length > 0 && (
           <div className="search-history-container">
@@ -425,7 +462,7 @@ export default function SkyExplorer() {
               </button>
             ))}
         </div>
-        <p id="search-coordinate-hint" className="search-coordinate-hint">Search a name or enter coordinates in degrees, e.g. 269.4521, +4.6934</p>
+        <p id="search-coordinate-hint" className="search-coordinate-hint">Search a star name, a Gaia DR3 ID, or coordinates in degrees, e.g. 269.4521, +4.6934</p>
       </div>
     </div>
     <section className="sky" aria-label="Interactive sky map">
@@ -447,6 +484,8 @@ export default function SkyExplorer() {
         objectType={target?.type ?? lookup?.type ?? 'CUSTOM COORDINATES'}
         coordinates={coordinates}
         gaiaEnabled={gaiaEnabled}
+        gaiaSources={gaiaSources}
+        onRecentre={(ra, dec) => { setSelected(-1); setLookup(null); updateCoordinates(ra, dec); }}
         wiseEnabled={wiseEnabled}
         recenterTrigger={recenterCount}
         onCoordinatesChange={setViewCoordinates}
@@ -538,6 +577,6 @@ export default function SkyExplorer() {
         </>
       </section>
     </section>
-    <div className="search-feedback" role="status" hidden={searchOpen}>{message}</div>
+    <div className="search-feedback" role="status" hidden={searchOpen || !!searchError}>{message}</div>
   </main>;
 }

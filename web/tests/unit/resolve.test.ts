@@ -20,7 +20,7 @@ const fakeFetch = (handler: (url: string) => Response | Promise<Response>) =>
     const moved = r.dec - 4.69336496657667;
     assert.ok(moved > 0.07 && moved < 0.08, `moved ${moved}`);
     assert.equal(r.type, 'SIMBAD');
-    assert.equal(r.name, "Barnard's star");
+    assert.equal(r.name, "Barnard's Star", 'shows the name the user typed, not the SIMBAD designation');
   }
 }
 

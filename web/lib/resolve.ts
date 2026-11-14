@@ -40,7 +40,8 @@ async function byName(name: string, fetchFn: typeof fetch, now: number): Promise
     return { ok: false, message: `No object called “${name}” was found. Check the spelling, or enter RA, Dec in degrees.` };
   }
   const { ra, dec } = propagate(found, mjdNow(now), J2000_MJD);
-  return { ok: true, name: found.name || name, type: 'SIMBAD', ra, dec };
+  // Show what the user typed: SIMBAD's main id is often a designation such as "* alf Lyr".
+  return { ok: true, name, type: 'SIMBAD', ra, dec };
 }
 
 /** Resolve a Gaia DR3 id or an object name. Coordinates are handled by the caller. */
