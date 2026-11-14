@@ -16,9 +16,11 @@ import json
 import os
 import tempfile
 import threading
+import time
 import warnings
 import zlib
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
@@ -32,10 +34,11 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from server import gaia
+from server import diskcache
 from server.catalog import catalog
 from server.cutouts import CutoutError, cache_dir, check_uri, fetch_cutout
 from server.irsa import Exposure, IrsaError, find_exposures
-from server.mirror import fetch_exposure, open_frame, prefetch
+from server.mirror import fetch_exposure, frame_meta, open_frame, prefetch
 from server.ranges import fetch_crop
 from server.wavelengths import exposure_wavelengths
 from server.patches import (
@@ -68,7 +71,28 @@ MAX_FOV_DEG = 1.0
 # the old look. 2: NaN-aware resampling and the saturation-aware pixel mask.
 RENDER_VERSION = 2
 
-app = FastAPI(title="SPHEREx Blink")
+# A cell's exposure list fetched from IRSA (no complete snapshot) is reused for a
+# day, so a new release reaches the page within a day without asking IRSA per view.
+CELL_CACHE_MAX_AGE_S = diskcache.TAP_MAX_AGE_S
+
+# What the page reads when a frame cannot be had. Sequence frames and wavelength
+# maps always come from the mirror (server/ranges.py); patch frames follow
+# SPHEREX_SOURCE.
+MIRROR_DOWN = "The SPHEREx copy on AWS (the mirror) did not return this frame. Try again in a moment."
+IRSA_DOWN = "The SPHEREx archive (IRSA) did not return this frame. Try again."
+
+def _prune_soon() -> None:
+    """Hold the rendered caches under their size cap (server/diskcache.py)."""
+    diskcache.prune_in_background(cache_dir())
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    _prune_soon()  # a server that was stopped over a full cache starts trimmed
+    yield
+
+
+app = FastAPI(title="SPHEREx Blink", lifespan=_lifespan)
 
 
 def pixel_source() -> str:
@@ -78,8 +102,11 @@ def pixel_source() -> str:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict:
+    """Backend is up, plus how fresh the local exposure list is: `snapshot.complete`,
+    `snapshot.through_mjd` (filled up to this date, MJD) and `snapshot.exposures`.
+    When the snapshot is missing or incomplete, exposure lists come from IRSA."""
+    return {"status": "ok", "snapshot": catalog().status()}
 
 
 @app.get("/api/targets")
@@ -157,27 +184,54 @@ def _write_atomic(path: Path, data: bytes) -> None:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+    diskcache.note_write(_prune_soon)
+
+
+def _read_cached(png_path: Path, meta_path: Path) -> tuple[bytes, dict]:
+    """A rendered frame and its metadata from disk, marked as just used. Raises
+    OSError or ValueError on a miss: either file missing, bad JSON, or metadata
+    written before frames carried `mjd_start` (rendered again and overwritten in
+    place, so no RENDER_VERSION bump strands the old cache)."""
+    out = png_path.read_bytes(), json.loads(meta_path.read_text())
+    if "mjd_start" not in out[1]:
+        raise ValueError("metadata from before start/end times")
+    diskcache.touch(png_path)
+    diskcache.touch(meta_path)
+    return out
+
+
+def _complete_snapshot_at(ra: float, dec: float) -> list[Exposure] | None:
+    """Exposures holding the point, from the local snapshot when it is complete;
+    None when there is no snapshot or it is still being filled (its answer may be
+    missing exposures)."""
+    snapshot = catalog()
+    found = snapshot.find(ra, dec)
+    return found if found is not None and snapshot.complete else None
 
 
 def _exposures_for_cell(cell: int) -> list[Exposure]:
-    """Exposures covering the cell centre: per-cell disk cache, then the local
-    snapshot (server/catalog.py), then IRSA TAP."""
+    """Exposures covering the cell centre: the complete local snapshot
+    (server/catalog.py), else a per-cell disk cache younger than
+    CELL_CACHE_MAX_AGE_S, else IRSA TAP.
+
+    The snapshot comes first so that refreshing it after a new release takes
+    effect at once; the disk cache only spares IRSA when there is no snapshot.
+    """
+    found = _complete_snapshot_at(*cell_centre(cell))
+    if found is not None:
+        return found
     path = cache_dir() / "tap" / f"{cell}.json"
     try:
-        rows = json.loads(path.read_text())
-        return [
-            Exposure(r["uri"], r["mjd"], r["detector"], r["obs_id"],
-                     tuple(tuple(p) for p in r["footprint"]))
-            for r in rows
-        ]
+        if time.time() - path.stat().st_mtime < CELL_CACHE_MAX_AGE_S:
+            rows = json.loads(path.read_text())
+            return [
+                Exposure(r["uri"], r["mjd"], r["detector"], r["obs_id"],
+                         tuple(tuple(p) for p in r["footprint"]))
+                for r in rows
+            ]
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    snapshot = catalog()
-    exposures = snapshot.find(*cell_centre(cell))
-    if exposures is None or not snapshot.complete:
-        # No local snapshot, or it is still being filled (its answer may be
-        # missing exposures): ask IRSA.
-        exposures = find_exposures(*cell_centre(cell))
+    exposures = find_exposures(*cell_centre(cell))
     rows = [
         {"uri": e.uri, "mjd": e.mjd, "detector": e.detector, "obs_id": e.obs_id,
          "footprint": [list(p) for p in e.footprint]}
@@ -234,7 +288,10 @@ def view(
             **({"stack": cell, "count": len(members)} if stack else {}),
             "uri": e.uri,
             "obs_id": e.obs_id,
+            # mjd is the exposure start (TAP time_bounds_lower); the frame
+            # headers carry the average too (X-Frame-Meta mjd vs mjd_start).
             "mjd": e.mjd,
+            "mjd_start": e.mjd,
             "date": Time(e.mjd, format="mjd").iso[:10],
             "detector": e.detector,
             "visit": visit_of[e.uri],
@@ -297,12 +354,7 @@ def _render_frame(pix: int, uri: str) -> tuple[bytes, dict]:
                 warnings.simplefilter("ignore")
                 grid = resample_north_up(image, WCS(header), ra, dec, PATCH_N)
                 wavelength_um, _ = wavelength_at(hdul, ra, dec)
-            meta = {
-                "mjd": float(header["MJD-AVG"]),
-                "detector": int(header["DETECTOR"]),
-                "wavelength_um": wavelength_um,
-                "obs_id": str(header["OBSID"]),
-            }
+            meta = {**frame_meta(header), "wavelength_um": wavelength_um}
         return to_png(grid), meta
     except Exception as err:  # corrupt or incomplete file: KeyError, ValueError, OSError, astropy errors
         Path(path).unlink(missing_ok=True)
@@ -317,7 +369,7 @@ def render_frame_cached(pix: int, uri: str) -> tuple[bytes, dict]:
     """
     png_path, meta_path = _frame_paths(pix, uri)
     try:
-        return png_path.read_bytes(), json.loads(meta_path.read_text())
+        return _read_cached(png_path, meta_path)
     except (OSError, ValueError):
         pass
     png, meta = _render_frame(pix, uri)
@@ -326,12 +378,24 @@ def render_frame_cached(pix: int, uri: str) -> tuple[bytes, dict]:
     return png, meta
 
 
+class NotInStack(Exception):
+    """The stack cell's list does not hold the uri: the caller mixed a stack uri
+    with a view it did not come from. A caller mistake, so 422, not 502."""
+
+
 def _stack_members(cell: int, uri: str) -> list[Exposure]:
-    """Every exposure of the same visit and detector as `uri`, from `cell`'s list."""
-    for visit in group_visits(_exposures_for_cell(cell)):
+    """Every exposure of the same visit and detector as `uri`, from `cell`'s list.
+
+    Raises NotInStack when the list has exposures but not `uri`. An empty list
+    gives [], which the renderer reports as a missing frame (502).
+    """
+    exposures = _exposures_for_cell(cell)
+    for visit in group_visits(exposures):
         detector = next((e.detector for e in visit if e.uri == uri), None)
         if detector is not None:
             return [e for e in visit if e.detector == detector]
+    if exposures:
+        raise NotInStack(uri)
     return []
 
 
@@ -365,11 +429,11 @@ def _render_stack(pix: int, uri: str, cell: int) -> tuple[bytes, dict]:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pixels stay NaN
         median = np.nanmedian(np.stack([d[0] for d in done]), axis=0)
-    times = sorted(d[2]["mjd"] for d in done)
     meta = {
-        "mjd": float(np.median(times)),
-        "mjd_first": times[0],
-        "mjd_last": times[-1],
+        "mjd": float(np.median([d[2]["mjd"] for d in done])),
+        # the span the median covers: first exposure's start to last one's end
+        "mjd_start": min(d[2]["mjd_start"] for d in done),
+        "mjd_end": max(d[2]["mjd_end"] for d in done),
         "detector": done[0][2]["detector"],
         "wavelength_um": float(np.median([d[1] for d in done])),
         "obs_id": "",
@@ -382,7 +446,7 @@ def render_stack_cached(pix: int, uri: str, cell: int) -> tuple[bytes, dict]:
     """As `render_frame_cached`, for the visit median."""
     png_path, meta_path = _frame_paths(pix, uri, kind=f"-stack/{cell}")
     try:
-        return png_path.read_bytes(), json.loads(meta_path.read_text())
+        return _read_cached(png_path, meta_path)
     except (OSError, ValueError):
         pass
     png, meta = _render_stack(pix, uri, cell)
@@ -407,10 +471,14 @@ def patch_frame(
             png, meta = render_frame_cached(pix, uri)
         else:
             png, meta = render_stack_cached(pix, uri, stack)
+    except NotInStack as err:
+        raise HTTPException(
+            422, f"The stack parameter must be the centre cell of the view that "
+                 f"listed this exposure; this exposure is not part of cell {stack}.") from err
     except IrsaError as err:
         raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
     except CutoutError as err:
-        raise HTTPException(502, "The SPHEREx archive (IRSA) did not return this frame. Try again.") from err
+        raise HTTPException(502, MIRROR_DOWN if pixel_source() == "aws" else IRSA_DOWN) from err
     return Response(
         png,
         media_type="image/png",
@@ -458,14 +526,17 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
     and two requests for the same exposure share one fetch.
     """
     key = (uri, ra, dec, fov)
+    name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}".encode()).hexdigest()
+    path = cache_dir() / "grids" / f"v{RENDER_VERSION}" / name[:2] / f"{name}.npz"
     with _grids_guard:
         hit = _grids.pop(key, None)
         if hit is not None:
             _grids[key] = hit
-            return hit
-        lock = _grid_locks.setdefault(key, threading.Lock())
-    name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}".encode()).hexdigest()
-    path = cache_dir() / "grids" / f"v{RENDER_VERSION}" / name[:2] / f"{name}.npz"
+        else:
+            lock = _grid_locks.setdefault(key, threading.Lock())
+    if hit is not None:
+        diskcache.touch(path)  # in use, so the disk copy is the last to be pruned
+        return hit
     with lock:
         with _grids_guard:
             hit = _grids.get(key)
@@ -474,6 +545,9 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
         try:
             with np.load(path) as saved:
                 out = (saved["grid"], float(saved["wavelength"]), json.loads(str(saved["meta"])))
+            if "mjd_start" not in out[2]:  # saved before start/end times: fetch again
+                raise KeyError("mjd_start")
+            diskcache.touch(path)
         except (OSError, ValueError, KeyError):
             with fetch_crop(uri, ra, dec, fov) as hdul, warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # SIP without -SIP CTYPE; applying it is intended
@@ -481,8 +555,7 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
                 grid = resample_north_up(
                     science_image(hdul), WCS(header), ra, dec, _seq_size(fov))
                 wavelength_um, _ = wavelength_at(hdul, ra, dec)
-                meta = {"mjd": float(header["MJD-AVG"]), "detector": int(header["DETECTOR"]),
-                        "obs_id": str(header["OBSID"])}
+                meta = frame_meta(header)
             out = (grid, wavelength_um, meta)
             buffer = io.BytesIO()
             np.savez(buffer, grid=grid, wavelength=wavelength_um, meta=json.dumps(meta))
@@ -502,9 +575,16 @@ def _sequence(ra: float, dec: float, detector: int | None = None,
     """(exposure, visit index, wavelength) for every exposure whose footprint holds
     the point, in time order, kept if it is on `detector` or, when `wavelength` is
     given, if the wavelength it records at the point is within the fraction `width`
-    of it (0.05 keeps 5 % either side). Wavelength is None in detector mode."""
+    of it (0.05 keeps 5 % either side). Wavelength is None in detector mode.
+
+    The complete snapshot is asked about the point itself. Without one, the list
+    of the point's cell is filtered to the point, which misses the few exposures
+    that reach the point but not the cell centre (about 2 % on average)."""
+    found = _complete_snapshot_at(ra, dec)
+    if found is None:
+        found = _exposures_for_cell(cell_of(ra, dec))
     covering = []
-    for index, visit in enumerate(group_visits(_exposures_for_cell(cell_of(ra, dec)))):
+    for index, visit in enumerate(group_visits(found)):
         covering += [(e, index) for e in visit if footprint_contains(e.footprint, ra, dec)]
     if wavelength is None:
         return [(e, v, None) for e, v in covering if e.detector == detector]
@@ -535,7 +615,8 @@ def sequence(
         raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
     except CutoutError as err:
         raise HTTPException(
-            502, "The SPHEREx archive (IRSA) did not return the wavelength map. Try again.") from err
+            502, "The SPHEREx copy on AWS (the mirror) did not return the wavelength map."
+                 " Try again in a moment.") from err
     by_visit: dict[int, list[Exposure]] = {}
     for e, visit, _ in items:
         by_visit.setdefault(visit, []).append(e)
@@ -550,6 +631,9 @@ def sequence(
         "cells": [{"pix": pix, "ra": ra, "dec": dec, "ring": 0}],
         "exposures": [
             {"uri": e.uri, "obs_id": e.obs_id, "mjd": e.mjd,
+             # mjd is the exposure start (TAP time_bounds_lower), named here too
+             # so it cannot be read as the frame header's MJD-AVG.
+             "mjd_start": e.mjd,
              "date": Time(e.mjd, format="mjd").iso[:10], "detector": e.detector,
              "visit": visit, "first": e.uri in coarse, "cells": [pix],
              **({} if seen is None else {"wavelength_um": round(seen, 4)})}
@@ -617,18 +701,18 @@ def sequence_frame(
     base = cache_dir() / "png" / f"v{RENDER_VERSION}-seq" / name[:2] / name
     png_path, meta_path = base.with_suffix(".png"), base.with_suffix(".json")
     try:
-        png, meta = png_path.read_bytes(), json.loads(meta_path.read_text())
+        png, meta = _read_cached(png_path, meta_path)
     except (OSError, ValueError):
         try:
             png, meta = _render_sequence_frame(uri, ra, dec, fov, roll, wavelength, width)
         except IrsaError as err:
             raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
         except CutoutError as err:
-            raise HTTPException(
-                502, "The SPHEREx archive (IRSA) did not return this frame. Try again.") from err
+            raise HTTPException(502, MIRROR_DOWN) from err
         except Exception as err:  # a file the pipeline cannot read
             raise HTTPException(
-                502, "The SPHEREx archive (IRSA) returned a frame that could not be drawn.") from err
+                502, "The SPHEREx copy on AWS (the mirror) returned a frame that could not be"
+                     " drawn. Try another frame.") from err
         _write_atomic(meta_path, json.dumps(meta).encode())
         _write_atomic(png_path, png)
     return Response(

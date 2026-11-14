@@ -25,7 +25,7 @@ Modules both use live in `web/shared/`. Node 22 for tests.
 ```bash
 uv sync                          # install
 uv run pytest -q                 # server tests (offline)
-cd web && npm install && npm test   # frontend tests (web/tests/shared, web/tests/unit)
+cd web && npm install && npm test   # frontend tests (web/tests/shared, web/tests/unit; the glob is quoted: a bare directory fails on Node 24)
 uv run uvicorn server.app:app --reload --port 8000   # backend + test bench at :8000
 cd web && npm run dev            # main app at :5173 (SPHEREX_BACKEND_URL in web/.env.local)
 ```

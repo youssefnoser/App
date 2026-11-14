@@ -36,7 +36,29 @@ def fixture_rows() -> int:
 def test_health_ok():
     response = TestClient(app).get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    # the snapshot block tells the frontend whether the data is fresh
+    assert set(body["snapshot"]) == {"complete", "through_mjd", "exposures"}
+    assert isinstance(body["snapshot"]["complete"], bool)
+    assert isinstance(body["snapshot"]["exposures"], int)
+
+
+def test_health_reports_snapshot_freshness(monkeypatch, tmp_path):
+    """With a complete snapshot, /health says how far the data reaches."""
+    from server import catalog as catalog_module
+
+    monkeypatch.setenv("SPHEREX_CACHE_DIR", str(tmp_path))
+    conn = catalog_module.open_db()
+    try:
+        catalog_module.set_meta(conn, "complete", "1")
+        catalog_module.set_meta(conn, "through_mjd", "60914.484")
+        conn.commit()
+    finally:
+        conn.close()
+    body = TestClient(app).get("/health").json()
+    assert body["snapshot"]["complete"] is True
+    assert body["snapshot"]["through_mjd"] == pytest.approx(60914.484)
 
 
 def test_decode_footprint_known():
@@ -47,6 +69,31 @@ def test_decode_footprint_known():
     assert abs(corners[0][1] - 5.472470) < 1e-5
     assert abs(corners[2][0] - 269.997314) < 1e-5
     assert abs(corners[2][1] - 1.660075) < 1e-5
+
+
+def test_decode_footprint_drops_a_closing_point_off_by_rounding():
+    """A ring closed by a point a hair away from the first is still a quad: four
+    corners, as the wavelength lookup needs."""
+    import struct
+
+    data = bytearray(bytes.fromhex(HEX_WKB))
+    lon, lat = struct.unpack_from("<dd", data, 17)
+    struct.pack_into("<dd", data, 17 + 4 * 16, lon + 1e-12, lat - 1e-12)
+    assert len(decode_footprint(data.hex())) == 4
+
+
+def test_truncated_tap_response_skips_or_reports_the_bad_row():
+    lines = FIXTURE.read_text().splitlines()
+    # only the first field of the last row arrived: the others read as None
+    cut = "\n".join(lines[:3] + [lines[3].split(",")[0]]) + "\n"
+    assert len(parse_tap_csv(cut, skip_bad=True)) == 2
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=cut)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(IrsaError):
+            find_exposures(269.4463, 4.7677, client=client)
 
 
 def test_decode_footprint_rejects_big_endian():

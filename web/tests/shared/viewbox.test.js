@@ -82,3 +82,23 @@ test('zoom buttons halve or double the field of view, capped at the widest view'
   assert.equal(zoomFov(MAX_FOV_DEG, 2), 105);
   assert.equal(zoomFov(MAX_FOV_DEG, 0.5), 52.5);
 });
+
+test('boxOnScreen: a box is on screen while any part of it overlaps the canvas', async () => {
+  const { boxOnScreen } = await import('../../shared/viewbox.js');
+  const view = { ra: 100, dec: 0 }; // 0.1 deg tall, 0.2 deg wide canvas
+  const box = (dRa, dDec) => ({ ra: 100 + dRa, dec: dDec, fov: 0.1 });
+  assert.equal(boxOnScreen(box(0, 0), view, 0.1, 1600, 800), true);
+  assert.equal(boxOnScreen(box(0.14, 0), view, 0.1, 1600, 800), true); // edge still in view
+  assert.equal(boxOnScreen(box(0.16, 0), view, 0.1, 1600, 800), false); // gone to the east
+  assert.equal(boxOnScreen(box(0, 0.11), view, 0.1, 1600, 800), false); // gone to the north
+  assert.equal(boxOnScreen({ ra: 359.99, dec: 0, fov: 0.1 }, { ra: 0.01, dec: 0 }, 0.1, 800, 800), true); // RA wraps
+});
+
+test('boxInside: one box lies wholly inside another', async () => {
+  const { boxInside } = await import('../../shared/viewbox.js');
+  const outer = { ra: 50, dec: 10, fov: 0.4 };
+  assert.equal(boxInside({ ra: 50, dec: 10, fov: 0.2 }, outer), true);
+  assert.equal(boxInside({ ra: 50.05, dec: 10.05, fov: 0.2 }, outer), true);
+  assert.equal(boxInside({ ra: 50, dec: 10.15, fov: 0.2 }, outer), false); // pokes out north
+  assert.equal(boxInside(outer, { ra: 50, dec: 10, fov: 0.2 }), false);
+});

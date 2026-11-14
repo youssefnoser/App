@@ -86,3 +86,28 @@ def test_wraps_ra_zero(tmp_path, monkeypatch):
     assert [e.uri for e in c.find(0.2, 0.3)] == ["ibe/data/spherex/z.fits"]
     assert [e.uri for e in c.find(359.7, -0.3)] == ["ibe/data/spherex/z.fits"]
     assert c.find(3.0, 0.0) == []
+
+
+def test_status_reads_only_the_summary(tmp_path, exposures, monkeypatch):
+    """/health asks for the status often; it must not reload the exposure index
+    (slow while the snapshot is being filled) or wait on the lookup lock."""
+    path = tmp_path / "snap.sqlite"
+    conn = cat.open_db(path)
+    cat.add_exposures(conn, exposures)
+    cat.set_meta(conn, "complete", "1")
+    cat.set_meta(conn, "through_mjd", "61357.5")
+    conn.commit()
+    conn.close()
+    c = cat.Catalog(path)
+    monkeypatch.setattr(c, "_load", lambda: pytest.fail("status must not reload the index"))
+    import threading
+
+    got = []
+    with c._lock:  # a lookup in progress does not block it
+        asker = threading.Thread(target=lambda: got.append(c.status()), daemon=True)
+        asker.start()
+        asker.join(timeout=5)
+    assert got, "status() waited on the lookup lock"
+    assert got[0] == {"complete": True, "through_mjd": 61357.5, "exposures": len(exposures)}
+    assert cat.Catalog(tmp_path / "none.sqlite").status() == {
+        "complete": False, "through_mjd": None, "exposures": 0}

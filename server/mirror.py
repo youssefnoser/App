@@ -13,6 +13,7 @@ recently used files are deleted. The rendered PNGs live elsewhere and are kept.
 
 import fcntl
 import hashlib
+import math
 import os
 import tempfile
 import threading
@@ -53,10 +54,13 @@ def mirror_url(uri: str) -> str:
 
 
 def cache_cap_bytes() -> int:
-    """Size limit of the exposure cache: SPHEREX_EXPOSURE_CACHE_GB, default 20."""
+    """Size limit of the exposure cache: SPHEREX_EXPOSURE_CACHE_GB, default 20.
+    A value that is not a finite number falls back to the default."""
     try:
         gb = float(os.environ.get("SPHEREX_EXPOSURE_CACHE_GB", DEFAULT_CAP_GB))
     except ValueError:
+        gb = DEFAULT_CAP_GB
+    if not math.isfinite(gb):
         gb = DEFAULT_CAP_GB
     return int(max(gb, 0.0) * 1e9)
 
@@ -86,7 +90,9 @@ def _trim(raw: Path, out: Path) -> None:
     try:
         with fits.open(raw, memmap=True) as hdul:
             names = [h.name for h in hdul]
-            missing = [n for n in ("IMAGE", "FLAGS", "ZODI") if n not in names]
+            # all four are needed to draw a frame: Frame builds the wavelength
+            # WCS from WCS-WAVE, so a file without it must not be cached
+            missing = [n for n in KEEP_HDUS if n not in names]
             if missing:
                 raise CutoutError(f"The archive file has no {', '.join(missing)} extension.")
             kept = [fits.PrimaryHDU(header=hdul[0].header)]
@@ -140,8 +146,10 @@ def fetch_exposure(uri: str, *, client: httpx.Client | None = None) -> Path:
                         handle.write(chunk)
             _trim(Path(raw_name), Path(out_name))
             os.replace(out_name, path)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, httpx.StreamError) as exc:
             raise CutoutError(f"The mirror did not return {uri}: {exc!r}") from exc
+        except OSError as exc:  # disk full or a write error while storing it
+            raise CutoutError(f"{uri} could not be stored in the cache: {exc}") from exc
         finally:
             Path(raw_name).unlink(missing_ok=True)
             Path(out_name).unlink(missing_ok=True)
@@ -172,6 +180,7 @@ def evict(keep: Path | None = None) -> None:
             if keep is not None and p == keep:
                 continue
             p.unlink(missing_ok=True)
+            _forget_frames(p)  # an open memmap would keep the deleted file on disk
             total -= size
 
 
@@ -230,6 +239,19 @@ def cut(path: Path, ra: float, dec: float, size_deg: float) -> fits.HDUList:
         raise CutoutError(f"The cached exposure could not be read: {exc}") from exc
 
 
+def frame_meta(header) -> dict:
+    """The X-Frame-Meta fields an exposure's IMAGE header gives, the same for the
+    mirror, IRSA and sequence paths. `mjd` is the average (MJD-AVG); `mjd_start`
+    and `mjd_end` are MJD-BEG and MJD-END. Exposure lists use the start."""
+    return {
+        "mjd": float(header["MJD-AVG"]),
+        "mjd_start": float(header["MJD-BEG"]),
+        "mjd_end": float(header["MJD-END"]),
+        "detector": int(header["DETECTOR"]),
+        "obs_id": str(header["OBSID"]),
+    }
+
+
 class Frame:
     """One cached exposure, opened once: WCS objects built and pixel arrays mapped.
 
@@ -244,11 +266,7 @@ class Frame:
             warnings.simplefilter("ignore")  # SIP without -SIP CTYPE; applying it is intended
             header = hdul["IMAGE"].header
             self.shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
-            self.meta = {
-                "mjd": float(header["MJD-AVG"]),
-                "detector": int(header["DETECTOR"]),
-                "obs_id": str(header["OBSID"]),
-            }
+            self.meta = frame_meta(header)
             self.sky = WCS(header)
             self.wave = WCS(header, fobj=hdul, key="W")
             self.wave.sip = None
@@ -292,22 +310,46 @@ _frames_guard = threading.Lock()
 MAX_OPEN_FRAMES = 48
 
 
+def _forget_frames(path: Path) -> None:
+    """Drop the open Frames of a file, so their memmaps (and the disk space of a
+    deleted file) are released once no request is still using them."""
+    with _frames_guard:
+        for key in [k for k in _frames if k[0] == str(path)]:
+            del _frames[key]
+
+
 def open_frame(path: Path) -> Frame:
-    """The shared Frame for a cached exposure file. Raises CutoutError if unreadable."""
+    """The shared Frame for a cached exposure file. Raises CutoutError if unreadable.
+
+    A new Frame is built outside the shared lock (it parses the header and builds
+    two WCS), so threads opening other files, or files already open, do not wait
+    on it. Two threads building the same Frame at once keep the first one stored.
+    A cached file that cannot be read is deleted, so the next request downloads
+    it again instead of failing on it until it is evicted.
+    """
     try:
         key = (str(path), path.stat().st_ino)
-        with _frames_guard:
-            frame = _frames.pop(key, None)
-            if frame is None:
-                frame = Frame(path)
-            _frames[key] = frame  # most recently used last
-            while len(_frames) > MAX_OPEN_FRAMES:
-                _frames.pop(next(iter(_frames)))
-        return frame
-    except CutoutError:
-        raise
-    except Exception as exc:
+    except OSError as exc:  # evicted meanwhile
         raise CutoutError(f"The cached exposure could not be read: {exc}") from exc
+    with _frames_guard:
+        frame = _frames.pop(key, None)
+        if frame is not None:
+            _frames[key] = frame  # most recently used last
+            return frame
+    try:
+        built = Frame(path)
+    except Exception as exc:
+        if path.parent == _folder():  # only ever delete our own cache files
+            path.unlink(missing_ok=True)
+        if isinstance(exc, CutoutError):
+            raise
+        raise CutoutError(f"The cached exposure could not be read: {exc}") from exc
+    with _frames_guard:
+        frame = _frames.pop(key, built)
+        _frames[key] = frame
+        while len(_frames) > MAX_OPEN_FRAMES:
+            _frames.pop(next(iter(_frames)))
+    return frame
 
 
 def prefetch(uris) -> None:

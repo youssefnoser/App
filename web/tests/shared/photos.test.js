@@ -118,3 +118,13 @@ test('replace of a photo that is gone does nothing', () => {
   assert.equal(cache.replace(7, 'A', 'clean-A', cal), null);
   assert.equal(layer.photos.length, 0);
 });
+
+test('showOnly can be limited to some patches', () => {
+  const layer = { add: (_type, args) => ({ ...args }), remove: () => {} };
+  const cache = new PhotoCache(layer);
+  const a = cache.ensure(1, 'u', 'blob:a', {}), b = cache.ensure(2, 'u', 'blob:b', {});
+  cache.showOnly('u', new Set([2]));
+  assert.deepEqual([a.visible, b.visible], [false, true]);
+  cache.showOnly('u');
+  assert.deepEqual([a.visible, b.visible], [true, true]);
+});

@@ -62,6 +62,10 @@ def test_view_shape(client, monkeypatch, exposures):
     out = body["exposures"]
     assert len(out) == len(exposures)
     assert [e["mjd"] for e in out] == sorted(e["mjd"] for e in out)
+    # `mjd` is the exposure start (TAP time_bounds_lower); MJD-AVG is not in this
+    # response. Date is derived from the same start time.
+    for e in out:
+        assert e["mjd_start"] == e["mjd"]
     assert sum(e["first"] for e in out) == len(first_batch(exposures))
     for e in out:
         date.fromisoformat(e["date"])
@@ -176,8 +180,10 @@ def test_frame_png(client, monkeypatch, tmp_path):
     assert img.size == (PATCH_N, PATCH_N)
     meta = json.loads(r.headers["x-frame-meta"])
     assert meta["detector"] == 6
-    assert set(meta) == {"mjd", "detector", "wavelength_um", "obs_id"}
+    assert set(meta) == {"mjd", "mjd_start", "mjd_end", "detector", "wavelength_um", "obs_id"}
     assert meta["wavelength_um"] > 0
+    assert meta["mjd_start"] > 61000 and meta["mjd_end"] > meta["mjd_start"]
+    assert meta["mjd_start"] <= meta["mjd"] <= meta["mjd_end"]
     assert len(calls) == 1
     ra, dec = cell_centre(CELL)
     assert calls[0][0] == GOOD_URI
@@ -416,6 +422,22 @@ def test_stack_frame_with_no_covering_exposure_is_502(aws_client, monkeypatch):
     assert r.status_code == 502
 
 
+def test_stack_param_must_match_exposure_visit(aws_client, monkeypatch):
+    """stack=X is only valid when the uri's visit actually covers cell X."""
+    from server.irsa import Exposure
+    square = ((269.0, 4.0), (270.0, 4.0), (270.0, 5.5), (269.0, 5.5))
+    e = Exposure(GOOD_URI, 61000.0, 6, "o", square)
+    other = Exposure("ibe/data/spherex/other.fits", 61000.0, 6, "o", square)
+    # the wrong cell holds a different exposure: the uri does not belong to it
+    monkeypatch.setattr(
+        app_module, "_exposures_for_cell",
+        lambda cell: [e] if cell == CELL else [other])
+    wrong_cell = CELL + 1
+    r = aws_client.get(f"/api/patch/{wrong_cell}/frame.png?uri={GOOD_URI}&stack={wrong_cell}")
+    assert r.status_code == 422
+    assert "stack" in r.text.lower()
+
+
 # --- live sequence: one image per exposure, read by byte ranges ---
 
 
@@ -585,3 +607,174 @@ def test_shared_modules_served(client):
 
 def test_web_source_not_exposed(client):
     assert client.get("/package.json").status_code == 404
+
+
+# --- audit fixes: exposures at the point, cache freshness, error wording ---
+
+
+def test_sequence_keeps_an_exposure_that_misses_the_cell_centre(aws_client, monkeypatch):
+    """The sequence is for a point, not a cell: an exposure that holds the point
+    but not the centre of the point's cell must still be listed."""
+    from server.irsa import Exposure
+    from server.patches import cell_of
+
+    c_ra, c_dec = cell_centre(CELL)
+    ra, dec = round(c_ra, 5), round(c_dec + 0.04, 5)
+    assert cell_of(ra, dec) == CELL
+    wide = ((c_ra - 1, c_dec - 1), (c_ra + 1, c_dec - 1), (c_ra + 1, c_dec + 1), (c_ra - 1, c_dec + 1))
+    edge = ((ra - 0.02, dec - 0.02), (ra + 0.02, dec - 0.02),
+            (ra + 0.02, dec + 0.02), (ra - 0.02, dec + 0.02))
+    assert footprint_contains(edge, ra, dec) and not footprint_contains(edge, c_ra, c_dec)
+    fill_snapshot([Exposure("ibe/data/spherex/wide.fits", 61000.0, 3, "a", wide),
+                   Exposure("ibe/data/spherex/edge.fits", 61001.0, 3, "b", edge)], complete=True)
+    patch_find(monkeypatch, IrsaError("must not be asked"))
+    body = aws_client.get(f"/api/sequence?ra={ra}&dec={dec}&fov=0.05&detector=3").json()
+    assert [e["uri"].rsplit("/", 1)[1] for e in body["exposures"]] == ["wide.fits", "edge.fits"]
+
+
+def write_cell_cache(tmp_path, rows, age_s=0.0):
+    import os
+    import time
+
+    path = tmp_path / "tap" / f"{CELL}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rows))
+    stamp = time.time() - age_s
+    os.utime(path, (stamp, stamp))
+
+
+STALE_ROW = {"uri": "ibe/data/spherex/stale.fits", "mjd": 60000.0, "detector": 1, "obs_id": "old",
+             "footprint": [[269.0, 4.0], [270.0, 4.0], [270.0, 5.5], [269.0, 5.5]]}
+
+
+def test_complete_snapshot_wins_over_an_old_cell_list(client, monkeypatch, exposures, tmp_path):
+    """After a snapshot refresh, a cell list cached before it must not keep being served."""
+    write_cell_cache(tmp_path, [STALE_ROW])
+    fill_snapshot(exposures, complete=True)
+    patch_find(monkeypatch, IrsaError("down"))
+    out = client.get(VIEW).json()["exposures"]
+    assert len(out) > 300
+    assert all("stale" not in e["uri"] for e in out)
+
+
+def test_cell_list_from_irsa_expires(client, monkeypatch, exposures, tmp_path):
+    write_cell_cache(tmp_path, [STALE_ROW], age_s=app_module.CELL_CACHE_MAX_AGE_S + 60)
+    calls = patch_find(monkeypatch, exposures)
+    out = client.get(VIEW).json()["exposures"]
+    assert len(calls) == 1
+    assert len(out) == len(exposures)
+
+
+def test_mirror_frame_failure_names_the_mirror(aws_client, monkeypatch):
+    def broken(uri):
+        raise CutoutError("nope")
+
+    monkeypatch.setattr(app_module, "fetch_exposure", broken)
+    r = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}")
+    assert r.status_code == 502
+    assert "mirror" in r.json()["detail"] and "IRSA" not in r.json()["detail"]
+
+
+def test_sequence_frame_failure_names_the_mirror(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+
+    def broken(*args):
+        raise CutoutError("nope")
+
+    monkeypatch.setattr(app_module, "fetch_crop", broken)
+    r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{SEQ}")
+    assert "mirror" in r.json()["detail"] and "IRSA" not in r.json()["detail"]
+
+
+# --- review fixes: stack lookups, time spans, old cached metadata ---
+
+
+def one_stack(monkeypatch):
+    """Two members of one visit (the fixture file twice) around the patch centre."""
+    from server.irsa import Exposure
+
+    src = FIXTURES / "crop_barnard_D6_2026-03-19.fits"
+    monkeypatch.setattr(app_module, "cell_centre", lambda pix: (269.4463, 4.7677))
+    square = ((269.0, 4.0), (270.0, 4.0), (270.0, 5.5), (269.0, 5.5))
+    members = [Exposure(GOOD_URI, 61000.0, 6, "o", square),
+               Exposure("ibe/data/spherex/y.fits", 61000.1, 6, "o", square)]
+    monkeypatch.setattr(app_module, "_exposures_for_cell", lambda cell: members)
+    monkeypatch.setattr(app_module, "fetch_exposure", lambda uri: src)
+    return src
+
+
+def test_stack_list_failure_is_502_not_500(aws_client, monkeypatch):
+    def down(cell):
+        raise IrsaError("down")
+
+    monkeypatch.setattr(app_module, "_exposures_for_cell", down)
+    r = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}&stack={CELL}")
+    assert r.status_code == 502
+
+
+def test_cached_stack_frame_does_not_look_up_exposures(aws_client, monkeypatch):
+    one_stack(monkeypatch)
+    url = f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}&stack={CELL}"
+    assert aws_client.get(url).status_code == 200
+    monkeypatch.setattr(app_module, "_exposures_for_cell",
+                        lambda cell: pytest.fail("a cached frame must not ask for the list"))
+    assert aws_client.get(url).status_code == 200
+
+
+def test_stack_time_span_is_first_start_to_last_end(aws_client, monkeypatch):
+    from astropy.io import fits
+
+    src = one_stack(monkeypatch)
+    header = fits.getheader(src, "IMAGE")
+    r = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}&stack={CELL}")
+    meta = json.loads(r.headers["x-frame-meta"])
+    assert meta["mjd_start"] == pytest.approx(header["MJD-BEG"], abs=1e-6)
+    assert meta["mjd_end"] == pytest.approx(header["MJD-END"], abs=1e-6)
+    assert "mjd_first" not in meta and "mjd_last" not in meta
+
+
+def test_frame_cached_before_start_end_times_is_rendered_again(client, monkeypatch, tmp_path):
+    calls = patch_cutout(monkeypatch, FIXTURES / "crop_barnard_D6_2026-03-19.fits")
+    url = f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}"
+    client.get(url)
+    (meta_path,) = (tmp_path / "png").rglob("*.json")
+    old = json.loads(meta_path.read_text())
+    del old["mjd_start"], old["mjd_end"]
+    meta_path.write_text(json.dumps(old))
+    meta = json.loads(client.get(url).headers["x-frame-meta"])
+    assert "mjd_start" in meta
+    assert len(calls) == 2
+
+
+def test_grid_cached_before_start_end_times_is_fetched_again(aws_client, monkeypatch, tmp_path):
+    import numpy as np
+
+    _, asked = seq_setup(monkeypatch, tmp_path)
+    url = f"/api/frame.png?uri=ibe/data/spherex/s2.fits&{SEQ}&roll=0"
+    aws_client.get(url)
+    (npz,) = (tmp_path / "grids").rglob("*.npz")
+    with np.load(npz) as saved:
+        grid, wavelength = saved["grid"], saved["wavelength"]
+        meta = json.loads(str(saved["meta"]))
+    del meta["mjd_start"], meta["mjd_end"]
+    np.savez(npz.with_suffix(""), grid=grid, wavelength=wavelength, meta=json.dumps(meta))
+    app_module._grids.clear()
+    for png in (tmp_path / "png").rglob("*"):
+        if png.is_file():
+            png.unlink()
+    meta = json.loads(aws_client.get(url).headers["x-frame-meta"])
+    assert "mjd_start" in meta
+    assert len(asked) == 2
+
+
+def test_grid_memory_hit_counts_as_use(aws_client, monkeypatch, tmp_path):
+    import os
+    import time
+
+    seq_setup(monkeypatch, tmp_path)
+    app_module._seq_grid("ibe/data/spherex/s2.fits", 269.4463, 4.7677, 0.05)
+    (npz,) = (tmp_path / "grids").rglob("*.npz")
+    stamp = time.time() - 3600
+    os.utime(npz, (stamp, stamp))
+    app_module._seq_grid("ibe/data/spherex/s2.fits", 269.4463, 4.7677, 0.05)  # from memory
+    assert time.time() - npz.stat().st_mtime < 60

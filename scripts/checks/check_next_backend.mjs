@@ -15,9 +15,10 @@ try {
  console.log(JSON.stringify({errors,sequences,frames,timeline:await page.locator('#time-knob').innerText(),status:await page.locator('.map-bottom').innerText()}));
  const mapState=await page.evaluate(()=>{
    const core=window.__stel.core;
-   return {stars:core.stars?.visible,milkyway:core.milkyway?.visible,dsos:core.dsos?.visible,survey:core.dss.visible};
+   // Stars, DSOs and the Milky Way draw nothing without a data source; planets would.
+   return {planets:core.planets.visible,survey:core.dss.visible};
  });
- if(mapState.stars || mapState.milkyway || mapState.dsos || !mapState.survey || oldMapRequests.length) throw Error(`Old map still present: ${JSON.stringify({mapState,oldMapRequests})}`);
+ if(mapState.planets || !mapState.survey || oldMapRequests.length) throw Error(`Old map still present: ${JSON.stringify({mapState,oldMapRequests})}`);
  await page.getByRole('button',{name:'Visible',exact:true}).click();
  if(!await page.evaluate(()=>window.__stel.core.dss.visible)) throw Error('SPHEREx background was hidden');
  await page.getByRole('button',{name:'Infrared',exact:true}).click();

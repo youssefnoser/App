@@ -65,6 +65,15 @@ def test_fetch_caches_once(isolated_cache):
         assert "IMAGE" in [h.name for h in hdul]
 
 
+def test_fetch_counts_toward_the_cache_prune(monkeypatch):
+    from server import diskcache
+
+    counted = []
+    monkeypatch.setattr(diskcache, "note_write", lambda spawn: counted.append(spawn))
+    fetch_cutout(URI, 269.4463, 4.7677, 0.18, client=client_serving(FIXTURE.read_bytes()))
+    assert len(counted) == 1
+
+
 def test_fetch_drops_epsf():
     with fits.open(FIXTURE) as hdul:
         extended = fits.HDUList([h.copy() for h in hdul])

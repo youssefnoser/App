@@ -4,11 +4,14 @@
   "private": true,
   "description": "NASA-inspired SPHEREx sky exploration frontend",
   "scripts": {
+    "sync-engine": "node scripts/sync-engine.mjs",
+    "predev": "node scripts/sync-engine.mjs",
     "dev": "next dev -p 5173",
+    "prebuild": "node scripts/sync-engine.mjs",
     "build": "next build",
     "start": "next start -p 5173",
     "check": "tsc --noEmit",
-    "test": "node --test 'tests/shared/*.test.js' && node --experimental-strip-types tests/unit/sky.test.ts && node --experimental-strip-types tests/unit/observations.test.ts && node --experimental-strip-types tests/unit/spectral.test.ts && node --experimental-strip-types tests/unit/backend.test.ts && node --experimental-strip-types tests/unit/resolve.test.ts && node --experimental-strip-types tests/unit/gaiaFetch.test.ts",
+    "test": "node --test 'tests/shared/*.test.js' && node --experimental-strip-types tests/unit/sky.test.ts && node --experimental-strip-types tests/unit/observations.test.ts && node --experimental-strip-types tests/unit/spectral.test.ts && node --experimental-strip-types tests/unit/backend.test.ts && node --experimental-strip-types tests/unit/resolve.test.ts && node --experimental-strip-types tests/unit/gaiaFetch.test.ts && node --experimental-strip-types tests/unit/zoom-ruler.test.ts && node --experimental-strip-types tests/unit/load-progress.test.ts",
     "test:browser": "playwright test"
   },
   "dependencies": {

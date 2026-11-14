@@ -80,30 +80,21 @@ test('Stellarium canvas renders, target crosshair displays, and features functio
   const filterStyle = await canvas.evaluate(el => getComputedStyle(el).filter);
   expect(filterStyle).not.toBe('none');
 
-  // 8. Google Maps style +/- zoom buttons with extended zoom capacity
-  const zoomSection = page.locator('.zoom-section');
-  await expect(zoomSection).toBeVisible();
-  const zoomInBtn = page.getByRole('button', { name: 'Zoom in' });
-  const zoomOutBtn = page.getByRole('button', { name: 'Zoom out' });
-  await expect(zoomInBtn).toBeVisible();
-  await expect(zoomOutBtn).toBeVisible();
-  const mapBottom = page.locator('.map-bottom');
-  // Zoom works as in the test bench: each button halves or doubles the field of view.
-  await expect(mapBottom).toContainText('5.0 arcmin');
-  await zoomInBtn.click();
-  await expect(mapBottom).toContainText('2.5 arcmin');
-  await zoomOutBtn.click();
-  await expect(mapBottom).toContainText('5.0 arcmin');
-  await zoomOutBtn.click();
-  await expect(mapBottom).toContainText('10.0 arcmin');
-  await zoomOutBtn.click();
-  await expect(mapBottom).toContainText('20.0 arcmin');
-  await expect(zoomOutBtn).toBeEnabled();
+  // 8. Straight zoom ruler: arrow keys step 1.25 times, Home is the deepest zoom.
+  const ruler = page.getByRole('slider', { name: 'Field of view' });
+  const fieldReadout = page.locator('.field-ruler-readout');
+  await expect(ruler).toBeVisible();
+  await expect(fieldReadout).toContainText('5.0′');
+  await ruler.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(fieldReadout).toContainText('4.0′');
+  await page.keyboard.press('ArrowDown');
+  await expect(fieldReadout).toContainText('5.0′');
+  await page.keyboard.press('PageDown'); // 5′ × 1.25^4
+  await expect(fieldReadout).toContainText('12′');
   await page.screenshot({ path: 'test-results/desktop-zoom-out-wide.png' });
-
-  for (let i = 0; i < 6; i++) await zoomInBtn.click();
-  await expect(mapBottom).toContainText('0.3 arcmin');
-  await expect(zoomInBtn).toBeEnabled();
+  await page.keyboard.press('Home');
+  await expect(fieldReadout).toContainText('12″');
   await page.screenshot({ path: 'test-results/desktop-zoom-in-deep.png' });
 
   // 9. Recenter button

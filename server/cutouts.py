@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 from astropy.io import fits
 
+from server import diskcache
 from server.http import make_client
 
 IRSA_BASE = "https://irsa.ipac.caltech.edu"
@@ -76,6 +77,7 @@ def fetch_cutout(
     check_uri(uri)
     path = _cache_path(uri, ra, dec, size_deg)
     if path.exists():
+        diskcache.touch(path)
         return path
 
     own_client = client is None
@@ -101,4 +103,5 @@ def fetch_cutout(
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
         raise
+    diskcache.note_write(lambda: diskcache.prune_in_background(cache_dir()))
     return path

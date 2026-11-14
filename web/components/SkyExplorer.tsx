@@ -1,23 +1,19 @@
 'use client';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { targets as initialTargets } from '@/lib/sky';
-import { MAX_FOV_DEG, zoomFov } from '@/shared/viewbox.js';
 import { cachedFetch } from '@/shared/frontend-cache.js';
-import type { BackendTimeline } from '@/shared/backend-sky.js';
+import type { BackendTimeline, LoadProgress } from '@/shared/backend-sky.js';
 import BandSelector from './BandSelector';
 import { getBandWavelength } from '@/lib/spectral';
+import { describeProgress } from '@/lib/load-progress';
 import { resolveQuery } from '@/lib/resolve';
 import { canShowGaia, needsRefetch, type Cone } from '@/lib/gaiaFetch';
 import type { GaiaSource } from '@/shared/gaia.js';
 import Rotor from './Rotor';
-import SkyCanvas, { type FovRequest } from './SkyCanvas';
+import ZoomRuler from './ZoomRuler';
+import SkyCanvas, { type SkyGoto, type SkyView } from './SkyCanvas';
 import ImageMath from './ImageMath';
-import {
-  GoogleMyLocationIcon,
-  GoogleLayersIcon,
-  GoogleZoomInIcon,
-  GoogleZoomOutIcon,
-} from './GoogleMapIcons';
+import { GoogleMyLocationIcon, GoogleLayersIcon } from './GoogleMapIcons';
 
 function SpaceTargetIcon({ type }: { type: string }) {
   if (type.includes('BROWN DWARF')) {
@@ -68,9 +64,6 @@ export type SearchHistoryItem = {
   timestamp: number;
 };
 
-// Field of view on load, after choosing a target and after Recenter: 5 arcminutes.
-const DEFAULT_FOV_DEG = 5 / 60;
-
 export default function SkyExplorer() {
   const [targets, setTargets] = useState(initialTargets);
   const [sequence, setSequence] = useState<BackendTimeline>({steps:[],index:0});
@@ -102,7 +95,7 @@ export default function SkyExplorer() {
       setTargets(updated);
       if (!hasInitialPosition && !new URLSearchParams(location.search).has('ra')) {
         setCoordinates({ra:updated[0].ra,dec:updated[0].dec});
-        setViewCoordinates({ra:updated[0].ra,dec:updated[0].dec});
+        flyTo({ra:updated[0].ra,dec:updated[0].dec,fovDeg:5/60});
       }
     }).catch(() => {});
     return () => controller.abort();
@@ -137,12 +130,15 @@ export default function SkyExplorer() {
   const [selected, setSelected] = useState(0);
   const [coordinates, setCoordinates] = useState({ ra: 269.4521, dec: 4.6934 });
   const [viewCoordinates, setViewCoordinates] = useState({ ra: 269.4521, dec: 4.6934 });
-  const [recenterCount, setRecenterCount] = useState(0);
-  // Zoom as in the test bench: the engine owns the fov; fovDeg mirrors it for the
-  // readout and buttons, and requestFov asks the engine for a new one.
-  const [fovDeg, setFovDeg] = useState(DEFAULT_FOV_DEG);
-  const [fovRequest, setFovRequest] = useState<FovRequest>({ fov: DEFAULT_FOV_DEG, id: 0 });
-  const requestFov = useCallback((fov: number) => setFovRequest(current => ({ fov, id: current.id + 1 })), []);
+  // The engine owns the view (as on index.html). `zoom` mirrors its field of view
+  // (1 = 5 arcmin) for the labels; `goto` sends it an explicit move.
+  const [zoom, setZoom] = useState(1);
+  const [goto, setGoto] = useState<SkyGoto>({ id: 0, ra: 269.4521, dec: 4.6934, fovDeg: 5 / 60 });
+  const flyTo = useCallback((move: Omit<SkyGoto, 'id'>) => setGoto(current => ({ ...move, id: current.id + 1 })), []);
+  const onView = useCallback((view: SkyView) => {
+    setViewCoordinates({ ra: view.ra, dec: view.dec });
+    setZoom((5 / 60) / view.fovDeg);
+  }, []);
   const [frame, setFrame] = useState(0), [playing, setPlaying] = useState(false), [speed, setSpeed] = useState(1), [loop, setLoop] = useState(true);
   const [infrared, setInfrared] = useState(true), [grid, setGrid] = useState(true), [bands, setBands] = useState<number[]>([22]);
   const [sequenceWavelength, setSequenceWavelength] = useState<number | undefined>(1.25);
@@ -167,12 +163,12 @@ export default function SkyExplorer() {
     const fromHash = location.hash.includes('ra=');
     const params = new URLSearchParams(fromHash ? location.hash.slice(1) : location.search), a = params.get('ra'), d = params.get('dec');
     const fov = Number(params.get('fov')), epoch = Number(params.get(fromHash ? 'step' : 'frame'));
-    // The hash gives fov in degrees, the query string in arcminutes.
-    if (params.has('fov') && Number.isFinite(fov) && fov > 0) requestFov(Math.min(MAX_FOV_DEG, fromHash ? fov : fov / 60));
+    // The hash holds the fov in degrees, the query string in arcmin.
+    const fovDeg = params.has('fov') && Number.isFinite(fov) && fov > 0 ? (fromHash ? fov : fov / 60) : undefined;
     if (params.has(fromHash ? 'step' : 'frame') && Number.isInteger(epoch) && epoch >= 0) { savedStep.current = epoch; setFrame(epoch); }
     if (a !== null && d !== null && a.trim() && d.trim() && Number.isFinite(+a) && Number.isFinite(+d) && +a >= 0 && +a < 360 && +d >= -90 && +d <= 90) {
       setCoordinates({ ra: +a, dec: +d });
-      setViewCoordinates({ ra: +a, dec: +d });
+      flyTo({ ra: +a, dec: +d, fovDeg: fovDeg ?? 5 / 60 }); // a link without fov opens at 5 arcmin
       setSelected(targets.findIndex(target => Math.abs(target.ra - +a) < .001 && Math.abs(target.dec - +d) < .001));
     }
   }, []);
@@ -186,16 +182,42 @@ export default function SkyExplorer() {
     return () => clearInterval(timer);
   }, [playing, loop, speed, frameCount]);
   useEffect(() => { if (playing && frame === lastFrame && !loop) setPlaying(false); }, [frame, loop, playing, lastFrame]);
+  const playState = useRef({ playing, frame, lastFrame, frameCount });
+  playState.current = { playing, frame, lastFrame, frameCount };
+  // Play from the start when stopped on the last step; a single step has nothing to blink.
+  const togglePlay = useCallback(() => {
+    const { playing, frame, lastFrame, frameCount } = playState.current;
+    if (!playing && frame === lastFrame) setFrame(0);
+    if (frameCount >= 2) setPlaying(!playing);
+  }, []);
+  // Space plays and pauses anywhere on the page except while typing. Handled on
+  // keydown and kept from the focused button too, which would otherwise click on keyup.
+  useEffect(() => {
+    const isSpace = (event: KeyboardEvent) => event.code === 'Space' || event.key === ' ';
+    const typing = (target: EventTarget | null) => target instanceof HTMLElement
+      && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+    const down = (event: KeyboardEvent) => {
+      if (!isSpace(event) || event.ctrlKey || event.metaKey || event.altKey || typing(event.target)) return;
+      event.preventDefault();
+      if (!event.repeat) togglePlay();
+    };
+    const up = (event: KeyboardEvent) => { if (isSpace(event) && !typing(event.target)) event.preventDefault(); };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+  }, [togglePlay]);
+  const onField = useCallback((arcmin: number) => flyTo({ fovDeg: arcmin / 60 }), [flyTo]);
 
   // Gaia overlay: ask /api/gaia 400 ms after the view settles, and only when the view
   // has left the last cone (or needs a different radius). Cleared when switched off.
+  const viewFovDeg = (5 / 60) / zoom;
   useEffect(() => {
     if (!gaiaEnabled) {
       setGaiaSources([]);
       gaiaCone.current = null;
       return;
     }
-    const view = { ra: viewCoordinates.ra, dec: viewCoordinates.dec, fov: fovDeg };
+    const view = { ra: viewCoordinates.ra, dec: viewCoordinates.dec, fov: viewFovDeg };
     if (!canShowGaia(view.fov)) {
       setGaiaSources([]);
       gaiaCone.current = null;
@@ -218,7 +240,9 @@ export default function SkyExplorer() {
       });
     }, 400);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [gaiaEnabled, viewCoordinates.ra, viewCoordinates.dec, fovDeg]);
+  }, [gaiaEnabled, viewCoordinates.ra, viewCoordinates.dec, viewFovDeg]);
+  const [progress, setProgress] = useState<LoadProgress | null>(null);
+  const status = describeProgress(progress);
   const onBands = useCallback((next: number[]) => { setBands(next); setSequenceWavelength(undefined); }, []);
   const onWavelength = useCallback((value: number) => {
     const nearest = Array.from({length:102}, (_, i) => i + 1).reduce((a, b) =>
@@ -269,14 +293,13 @@ export default function SkyExplorer() {
   function updateCoordinates(a: number, d: number) {
     lookupTicket.current++; // any navigation cancels a name lookup still in flight
     setCoordinates({ ra: a, dec: d });
-    setViewCoordinates({ ra: a, dec: d });
     const url = new URL(location.href);
     url.searchParams.set('ra', String(a));
     url.searchParams.set('dec', String(d));
     url.hash = '';
     savedStep.current = null;
     window.history.replaceState(null, '', url);
-    requestFov(DEFAULT_FOV_DEG);
+    flyTo({ ra: a, dec: d, fovDeg: 5 / 60 });
     setFrame(0);
     setPlaying(false);
   }
@@ -338,7 +361,7 @@ export default function SkyExplorer() {
     const ticket = ++lookupTicket.current;
     setMessage(`Looking up ${text}…`);
     resolveQuery(text).then(result => {
-      if (ticket !== lookupTicket.current) return; // a newer search replaced this one
+      if (ticket !== lookupTicket.current) return; // a newer search or move replaced this one
       if (!result.ok) {
         setMessage(result.message);
         setSearchError(result.message);
@@ -474,28 +497,25 @@ export default function SkyExplorer() {
     </div>
     <section className="sky" aria-label="Interactive sky map">
       <SkyCanvas
-        fovRequest={fovRequest}
-        onFov={setFovDeg}
+        goto={goto}
+        target={coordinates}
         frame={frame}
-        selected={selected}
-        bandCount={bands.length}
         bands={bands}
         sequenceWavelength={sequenceWavelength}
         sequenceWidth={sequenceWidth}
-        observationMjd={sequence.steps[frame]?.mjd}
         onTimeline={onTimeline}
         onStatus={setMessage}
+        onProgress={setProgress}
+        onView={onView}
         infrared={infrared}
         grid={grid}
         name={target?.name ?? lookup?.name ?? `${coordinates.ra.toFixed(4)}°, ${coordinates.dec >= 0 ? '+' : ''}${coordinates.dec.toFixed(4)}°`}
         objectType={target?.type ?? lookup?.type ?? 'CUSTOM COORDINATES'}
-        coordinates={coordinates}
         gaiaEnabled={gaiaEnabled}
         gaiaSources={gaiaSources}
+        observationMjd={sequence.steps[frame]?.mjd}
         onRecentre={(ra, dec) => { setSelected(-1); setLookup(null); updateCoordinates(ra, dec); }}
         wiseEnabled={wiseEnabled}
-        recenterTrigger={recenterCount}
-        onCoordinatesChange={setViewCoordinates}
       />
       <div className="map-top">
         <div className="map-top-left">
@@ -523,11 +543,7 @@ export default function SkyExplorer() {
         <button
           aria-label="Recenter map"
           title="Recenter on target"
-          onClick={() => {
-            requestFov(DEFAULT_FOV_DEG);
-            setViewCoordinates(coordinates);
-            setRecenterCount(c => c + 1);
-          }}
+          onClick={() => flyTo({ ra: coordinates.ra, dec: coordinates.dec, fovDeg: 5 / 60, retry: true })}
         >
           <GoogleMyLocationIcon />
         </button>
@@ -554,33 +570,11 @@ export default function SkyExplorer() {
         </button>
       </div>
       <BandSelector selected={bands} onSelection={onBands} onOpenChange={setBandsOpen} wavelength={sequenceWavelength ?? getBandWavelength(bands[0] ?? 22)} width={sequenceWidth} onWavelength={onWavelength} onWidth={setSequenceWidth} />
-      <div className="map-bottom"><span>{(fovDeg * 60).toFixed(1)} arcmin</span><span>{message || 'SPHEREx observations'}</span></div>
+      <ZoomRuler field={5 / zoom} status={status} frames={frameCount} onChange={onField} />
       <section className="timeline rotary-console" aria-label="Sky controls">
-        <div className="zoom-section map-zoom-controls" aria-label="Zoom controls">
-          <button
-            type="button"
-            id="zoom-in"
-            aria-label="Zoom in"
-            title="Zoom in"
-            onClick={() => requestFov(zoomFov(fovDeg, 0.5))}
-          >
-            <GoogleZoomInIcon />
-          </button>
-          <div className="zoom-divider" />
-          <button
-            type="button"
-            id="zoom-out"
-            aria-label="Zoom out"
-            title="Zoom out"
-            disabled={fovDeg >= MAX_FOV_DEG * (1 - 1e-6)}
-            onClick={() => requestFov(zoomFov(fovDeg, 2))}
-          >
-            <GoogleZoomOutIcon />
-          </button>
-        </div>
-        <><div className="knob-section time-section half-section"><Rotor id="time-knob" label="Observation frame" value={frame} min={0} max={Math.max(1, lastFrame)} step={1} labels={Array.from({length:6}, (_, i) => sequence.steps[Math.round(i * lastFrame / 5)]?.date.slice(5).replace('-', '/') ?? '--')} onChange={setFrame} onGrab={() => setPlaying(false)}><span>{sequence.steps[frame]?.date ?? 'Loading observations'}</span><small>FRAME {String(frameCount ? frame + 1 : 0).padStart(2, '0')} / {String(frameCount).padStart(2, '0')}</small></Rotor></div>
+        <><div className="knob-section time-section half-section"><Rotor id="time-knob" label="Observation frame" value={frame} min={0} max={Math.max(1, lastFrame)} step={1} labels={Array.from({length:6}, (_, i) => sequence.steps[Math.round(i * lastFrame / 5)]?.date.slice(5).replace('-', '/') ?? '--')} onChange={setFrame} onGrab={() => setPlaying(false)} progress={progress?.total ? status : undefined}><span>{sequence.steps[frame]?.date ?? (status.tone === 'idle' ? '—' : status.title)}</span><small>FRAME {String(frameCount ? frame + 1 : 0).padStart(2, '0')} / {String(frameCount).padStart(2, '0')}</small>{frameCount > 0 && <small className="load-status" data-tone={status.tone} title={status.detail}>{status.title}</small>}</Rotor></div>
         <div className="knob-section speed-section half-section"><Rotor id="speed-knob" label="Playback speed" value={speed} min={.5} max={3} step={.5} labels={['0.5×', '1×', '1.5×', '2×', '2.5×', '3×']} onChange={setSpeed}><span>{speed}×</span><small>PLAYBACK SPEED</small></Rotor></div>
-        <div className="playback-panel"><div className="playback-buttons"><button aria-label="Previous frame" onClick={() => { setPlaying(false); setFrame(Math.max(0, frame - 1)); }}>◀</button><button className="play" aria-label={playing ? 'Pause observations' : 'Play observations'} onClick={() => { if (!playing && frame === lastFrame) setFrame(0); if (frameCount >= 2) setPlaying(!playing); }}>{playing ? 'Ⅱ' : '▶'}</button><button aria-label="Next frame" onClick={() => { setPlaying(false); setFrame(Math.min(lastFrame, frame + 1)); }}>▶</button><button className={`loop${loop ? ' active' : ''}`} aria-label="Loop playback" aria-pressed={loop} onClick={() => setLoop(!loop)}>↻</button></div></div>
+        <div className="playback-panel"><div className="playback-buttons"><button aria-label="Previous frame" onClick={() => { setPlaying(false); setFrame(Math.max(0, frame - 1)); }}>◀</button><button className="play" aria-label={playing ? 'Pause observations' : 'Play observations'} aria-keyshortcuts="Space" title={playing ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay}>{playing ? 'Ⅱ' : '▶'}</button><button aria-label="Next frame" onClick={() => { setPlaying(false); setFrame(Math.min(lastFrame, frame + 1)); }}>▶</button><button className={`loop${loop ? ' active' : ''}`} aria-label="Loop playback" aria-pressed={loop} onClick={() => setLoop(!loop)}>↻</button></div></div>
         </>
       </section>
     </section>

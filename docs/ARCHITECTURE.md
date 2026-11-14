@@ -80,7 +80,8 @@ Object names are resolved in the browser by CDS Sesame (it allows any origin), n
 | `server/gaia.py` | Gaia DR3 from IRSA TAP: `cone()` (brightest + fast movers), `source()` by id |
 | `server/cutouts.py` | `fetch_cutout()` |
 | `server/mirror.py` | `fetch_exposure()` (whole file from the AWS mirror, trimmed, LRU cache with a size cap), `cut()` (local crop), `prefetch()` |
-| `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()` |
+| `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()`, `Catalog.status()` (for `/health`) |
+| `server/diskcache.py` | size cap (`SPHEREX_RENDER_CACHE_GB`, default 10) and expiry for `png/`, `grids/`, `cutouts/`, `tap/`: `prune()`, `touch()` |
 | `scripts/data/snapshot_metadata.py` | fill the snapshot from IRSA TAP in time windows, resumable (network) |
 | `server/footprint.py` | `exposure_from_head()`: time, detector, obs id and footprint from a file's first 28,800 bytes (hand-parsed TAN + SIP) |
 | `scripts/data/snapshot_from_aws.py` | fill the snapshot from the AWS mirror alone: list the bucket, read each file's header, resumable (network) |
@@ -103,8 +104,7 @@ Object names are resolved in the browser by CDS Sesame (it allows any origin), n
 | `web/shared/gaia.js` | Gaia helpers: `propagate()` (epoch), `classifyQuery()`, `parseSesame()`, `tooltipLines()` |
 | `web/lib/resolve.ts` | search lookups: name via Sesame, Gaia DR3 id via `/api/gaia/source`, placed at today's position |
 | `web/lib/gaiaFetch.ts` | `needsRefetch()`: when the overlay asks `/api/gaia` again |
-| `web/lib/projection.ts` | `projectSkyToScreen()`: RA/Dec to screen pixels for HTML markers |
-| `web/components/GaiaOverlay.tsx` | Gaia rings, fast-mover arrows, tooltips, click to re-centre |
+| `web/components/GaiaOverlay.tsx` | Gaia rings, fast-mover arrows, tooltips, click to re-centre; placed with `Sky.toScreen()` from `web/shared/sky.js` |
 | `tests/` | pytest (server); `tests/test_targets.py` covers the five targets |
 | `web/tests/shared/` | node:test for `web/shared/` |
 | `web/tests/unit/`, `web/tests/browser/` | Next.js unit tests and Playwright |
@@ -112,14 +112,24 @@ Object names are resolved in the browser by CDS Sesame (it allows any origin), n
 
 ## Next.js canvas integration
 
-The existing Next.js UI (`web/components/SkyExplorer.tsx`) controls the same
-Stellarium canvas via `SkyCanvas.tsx`. Its layout, drawers, overlays and control
-components remain in place. The test bench (`testbench/`) is a separate page; the server serves it at `/` and `web/shared/` at `/shared`.
+The Next.js UI (`web/components/SkyExplorer.tsx`) starts Stellarium exactly as
+the test bench (`testbench/index.html`) does: `SkyCanvas.tsx` calls `initSky()` from `web/shared/sky.js`, the
+engine owns the view (drag and wheel move it directly), and React only reads the
+view back (`onView`) or sends an explicit move (`goto`). Both pages load the engine
+from `/engine/`.
 
 | Path | Responsibility |
 |------|----------------|
-| `web/shared/backend-sky.js` | React adapter reusing the legacy `Loader`, `PhotoCache`, timeline and hash format; sequence queries, progressive PNG loading, rolling medians, cancellation and north-up calibration |
-| `web/shared/backend-sky.d.ts` | Typed adapter interface for React |
+| `web/shared/sky.js` | Engine bootstrap shared by both pages: script loading, equatorial airless view, SPHEREx HiPS background, RA/Dec read/set, engine-matching screen projection for the target marker |
+| `web/public/engine/` | Committed copy of the engine build; `npm run sync-engine` (also run before `dev` and `build`) refreshes it from `vendor/stellarium-web-engine/build` |
+| `web/shared/backend-sky.js` | Frame loading on the shared sky, reusing the legacy `Loader`, `PhotoCache`, timeline and hash format; sequence queries, progressive PNG loading, rolling medians, cancellation and north-up calibration. Frames are keyed per sequence box and earlier boxes stay loaded after a pan; the layer hides only when zoomed out past frame scale. The blink runs on one box: the loaded box that holds the whole canvas (most frames wins, the current box on a tie). Only that box is drawn and its exposures are the timeline, because two boxes drawn over each other sit on different pixel grids and shift the picture. Until the box being loaded has the exposure on screen (which it downloads first), every box on screen is drawn and the timeline carries over. The exposure the user chose is kept through reloads. A loaded box that still covers the view is asked for again instead of a new one, so the caches answer without a download |
+| `web/shared/backend-sky.d.ts` | Typed adapter interface for React, including `onProgress` ({phase, done, total, failed, cleaned}: finding, loading, cleaning while raw frames are swapped for their rolling medians, ready, failed, empty, error, zoomed-out, hidden) |
+| `web/shared/viewbox.d.ts` | Types for `viewbox.js` (frame-box geometry, `LOAD_FOV_DEG`) |
+| `web/components/ZoomRuler.tsx` | Straight zoom control: a log ruler of the field of view sliding under a fixed needle (drag, wheel, arrow/Page/Home/End keys); marks the 30′ stretch where frames load and says what the loader is doing |
+| `web/lib/zoom-ruler.ts` | Ruler geometry: field ↔ offset, ticks and labels, readout text, 1.25× steps |
+| `web/lib/load-progress.ts` | Plain-language title, detail and progress fractions for `onProgress`, shown on the time dial (arcs and status line) and under the ruler |
+
+The test bench (`testbench/`) is a separate page; the server serves it at `/` and `web/shared/` at `/shared`.
 | `web/lib/backend-bands.ts` | Map the existing selected bands into backend wavelength windows or detector queries |
 | `web/app/api/[...path]/route.ts` | Same-origin streaming proxy for the backend's target, view, patch, sequence and frame endpoints; preserves `X-Frame-Meta` |
 
@@ -145,7 +155,7 @@ and targets after one hour. Cache Storage keeps responses across reloads where
 supported; storage failures fall back to the bounded memory cache. Failed and
 aborted requests are not cached.
 
-`web/shared/frame-assets.js` keeps up to 256 image blobs within 64 MiB. The engine uses
+`web/shared/frame-assets.js` keeps up to 1024 image blobs within 64 MiB. It evicts a whole sequence box at a time, least recently used first, and never the box on screen, which alone may exceed the budget (a 1 deg box of 13 exposures is about 25 MB with the cleaned frames). The engine uses
 these Blob URLs instead of downloading each PNG again. Eviction removes the
 associated photo and revokes its URL; canvas disposal releases the remaining URLs.
 

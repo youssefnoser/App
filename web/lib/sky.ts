@@ -1,3 +1,6 @@
+export const MIN_ZOOM = (5 / 60) / 105;
+export const MAX_ZOOM = 25.0;
+
 export const targets = [
   { name: 'Barnard’s Star', ra: 269.4521, dec: 4.6934, type: 'HIGH PROPER-MOTION STAR', description: 'A star on the move' },
   { name: 'Epsilon Indi B', ra: 330.8417, dec: -56.785, type: 'BROWN DWARF PAIR', description: 'A hidden pair of brown dwarfs' },

@@ -3,7 +3,7 @@
 // Pixels are drawn by the engine from server PNGs (NaN is already alpha 0
 // there), so nothing in this file touches pixel values.
 
-import { initSky } from './sky.js';
+import { initSky } from '/shared/sky.js';
 import { Loader, priorityList } from '/shared/queue.js';
 import { buildSteps, keepStep } from '/shared/timeline.js';
 import { PhotoCache } from '/shared/photos.js';

@@ -3,14 +3,13 @@
 // of the frame on screen (or today) before it is projected, so a fast mover's ring
 // sits on the star in every blink frame. Fast movers also get an arrow along their motion.
 import { useState } from 'react';
-import { projectSkyToScreen } from '@/lib/projection';
 import { markerKind, mjdNow, propagate, tooltipLines, type GaiaSource } from '@/shared/gaia.js';
 
 type Props = {
-  stel: any;
+  // Engine-matching projection (Sky.toScreen in web/shared/sky.js).
+  toScreen: (ra: number, dec: number, width: number, height: number) => { x: number; y: number; visible: boolean };
   width: number;
   height: number;
-  viewTick: number; // changes whenever the view moves, to re-project
   sources: GaiaSource[];
   observationMjd?: number;
   onRecentre: (ra: number, dec: number) => void;
@@ -24,20 +23,20 @@ function ringSize(gmag: number | null): number {
   return Math.max(8, Math.min(22, 22 - 1.2 * (gmag - 8)));
 }
 
-export default function GaiaOverlay({ stel, width, height, sources, observationMjd, onRecentre }: Props) {
+export default function GaiaOverlay({ toScreen, width, height, sources, observationMjd, onRecentre }: Props) {
   const [hovered, setHovered] = useState<string | null>(null);
-  if (!stel || width <= 1 || height <= 1) return null;
+  if (width <= 1 || height <= 1) return null;
   const mjd = observationMjd ?? mjdNow();
 
   const markers = sources.flatMap(src => {
     const pos = propagate(src, mjd);
-    const at = projectSkyToScreen(stel, pos.ra, pos.dec, width, height);
+    const at = toScreen(pos.ra, pos.dec, width, height);
     if (!at || !at.visible) return [];
     const kind = markerKind(src);
     let arrow: { dx: number; dy: number } | null = null;
     if (kind === 'fast') {
       const later = propagate(src, mjd + 365.25);
-      const next = projectSkyToScreen(stel, later.ra, later.dec, width, height);
+      const next = toScreen(later.ra, later.dec, width, height);
       if (next) {
         const dx = next.x - at.x, dy = next.y - at.y, len = Math.hypot(dx, dy);
         if (len > 0.01) arrow = { dx: dx / len * ARROW_PX, dy: dy / len * ARROW_PX };
