@@ -1,0 +1,4 @@
+[submodule "vendor/stellarium-web-engine"]
+	path = vendor/stellarium-web-engine
+	url = https://github.com/youssefnoser/stellarium-web-engine.git
+	branch = spherex
