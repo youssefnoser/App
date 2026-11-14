@@ -571,3 +571,80 @@ def test_sequence_needs_exactly_one_of_detector_and_wavelength(aws_client, monke
     seq_setup(monkeypatch, tmp_path)
     assert aws_client.get(f"/api/sequence?{SEQ}").status_code == 422
     assert aws_client.get(f"/api/sequence?{SEQ}&detector=6&wavelength=4.6").status_code == 422
+
+
+# --- audit fixes: exposures at the point, cache freshness, error wording ---
+
+
+def test_sequence_keeps_an_exposure_that_misses_the_cell_centre(aws_client, monkeypatch):
+    """The sequence is for a point, not a cell: an exposure that holds the point
+    but not the centre of the point's cell must still be listed."""
+    from server.irsa import Exposure
+    from server.patches import cell_of
+
+    c_ra, c_dec = cell_centre(CELL)
+    ra, dec = round(c_ra, 5), round(c_dec + 0.04, 5)
+    assert cell_of(ra, dec) == CELL
+    wide = ((c_ra - 1, c_dec - 1), (c_ra + 1, c_dec - 1), (c_ra + 1, c_dec + 1), (c_ra - 1, c_dec + 1))
+    edge = ((ra - 0.02, dec - 0.02), (ra + 0.02, dec - 0.02),
+            (ra + 0.02, dec + 0.02), (ra - 0.02, dec + 0.02))
+    assert footprint_contains(edge, ra, dec) and not footprint_contains(edge, c_ra, c_dec)
+    fill_snapshot([Exposure("ibe/data/spherex/wide.fits", 61000.0, 3, "a", wide),
+                   Exposure("ibe/data/spherex/edge.fits", 61001.0, 3, "b", edge)], complete=True)
+    patch_find(monkeypatch, IrsaError("must not be asked"))
+    body = aws_client.get(f"/api/sequence?ra={ra}&dec={dec}&fov=0.05&detector=3").json()
+    assert [e["uri"].rsplit("/", 1)[1] for e in body["exposures"]] == ["wide.fits", "edge.fits"]
+
+
+def write_cell_cache(tmp_path, rows, age_s=0.0):
+    import os
+    import time
+
+    path = tmp_path / "tap" / f"{CELL}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rows))
+    stamp = time.time() - age_s
+    os.utime(path, (stamp, stamp))
+
+
+STALE_ROW = {"uri": "ibe/data/spherex/stale.fits", "mjd": 60000.0, "detector": 1, "obs_id": "old",
+             "footprint": [[269.0, 4.0], [270.0, 4.0], [270.0, 5.5], [269.0, 5.5]]}
+
+
+def test_complete_snapshot_wins_over_an_old_cell_list(client, monkeypatch, exposures, tmp_path):
+    """After a snapshot refresh, a cell list cached before it must not keep being served."""
+    write_cell_cache(tmp_path, [STALE_ROW])
+    fill_snapshot(exposures, complete=True)
+    patch_find(monkeypatch, IrsaError("down"))
+    out = client.get(VIEW).json()["exposures"]
+    assert len(out) > 300
+    assert all("stale" not in e["uri"] for e in out)
+
+
+def test_cell_list_from_irsa_expires(client, monkeypatch, exposures, tmp_path):
+    write_cell_cache(tmp_path, [STALE_ROW], age_s=app_module.CELL_CACHE_MAX_AGE_S + 60)
+    calls = patch_find(monkeypatch, exposures)
+    out = client.get(VIEW).json()["exposures"]
+    assert len(calls) == 1
+    assert len(out) == len(exposures)
+
+
+def test_mirror_frame_failure_names_the_mirror(aws_client, monkeypatch):
+    def broken(uri):
+        raise CutoutError("nope")
+
+    monkeypatch.setattr(app_module, "fetch_exposure", broken)
+    r = aws_client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}")
+    assert r.status_code == 502
+    assert "mirror" in r.json()["detail"] and "IRSA" not in r.json()["detail"]
+
+
+def test_sequence_frame_failure_names_the_mirror(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+
+    def broken(*args):
+        raise CutoutError("nope")
+
+    monkeypatch.setattr(app_module, "fetch_crop", broken)
+    r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s0.fits&{SEQ}")
+    assert "mirror" in r.json()["detail"] and "IRSA" not in r.json()["detail"]
