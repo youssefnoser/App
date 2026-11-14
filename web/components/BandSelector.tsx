@@ -84,7 +84,6 @@ export default function BandSelector({ selected, onSelection, onOpenChange, wave
         </div>
         <div className="band-ruler-ends" aria-hidden="true"><span>0.75 µm</span><span>5.0 µm</span></div>
       </div>
-      {selected.length > 1 && <p className="band-pop-note">{selected.length} bands are selected from Advanced options. Choose a number to view one band.</p>}
 
       <fieldset className="band-pop-window">
         <legend>Wavelength window</legend>

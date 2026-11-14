@@ -12,7 +12,6 @@ import type { GaiaSource } from '@/shared/gaia.js';
 import Rotor from './Rotor';
 import ZoomRuler from './ZoomRuler';
 import SkyCanvas, { type SkyGoto, type SkyView } from './SkyCanvas';
-import ImageMath from './ImageMath';
 import { GoogleMyLocationIcon, GoogleLayersIcon, FramesIcon } from './GoogleMapIcons';
 
 function SpaceTargetIcon({ type }: { type: string }) {
@@ -32,12 +31,12 @@ function SpaceTargetIcon({ type }: { type: string }) {
     return (
       <span className="target-icon-badge motion-star-badge" aria-hidden="true">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="13" cy="11" r="3.5" fill="rgba(56, 189, 248, 0.3)" stroke="#38bdf8" />
-          <line x1="13" y1="3" x2="13" y2="6" stroke="#38bdf8" strokeWidth="1.5" />
-          <line x1="13" y1="16" x2="13" y2="19" stroke="#38bdf8" strokeWidth="1.5" />
-          <line x1="5" y1="11" x2="8" y2="11" stroke="#38bdf8" strokeWidth="1.5" />
-          <line x1="18" y1="11" x2="21" y2="11" stroke="#38bdf8" strokeWidth="1.5" />
-          <path d="M4 19c2.5-1 5.5-3.5 7.5-6.5" stroke="#7dd3fc" strokeWidth="1.4" strokeDasharray="2 2" />
+          <circle cx="13" cy="11" r="3.5" fill="rgba(209, 209, 209, 0.3)" stroke="#d1d1d1" />
+          <line x1="13" y1="3" x2="13" y2="6" stroke="#d1d1d1" strokeWidth="1.5" />
+          <line x1="13" y1="16" x2="13" y2="19" stroke="#d1d1d1" strokeWidth="1.5" />
+          <line x1="5" y1="11" x2="8" y2="11" stroke="#d1d1d1" strokeWidth="1.5" />
+          <line x1="18" y1="11" x2="21" y2="11" stroke="#d1d1d1" strokeWidth="1.5" />
+          <path d="M4 19c2.5-1 5.5-3.5 7.5-6.5" stroke="#e1e1e1" strokeWidth="1.4" strokeDasharray="2 2" />
         </svg>
       </span>
     );
@@ -152,7 +151,6 @@ export default function SkyExplorer() {
   const [gaiaSources, setGaiaSources] = useState<GaiaSource[]>([]);
   const gaiaCone = useRef<Cone | null>(null);
   const [wiseEnabled, setWiseEnabled] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [bandsOpen, setBandsOpen] = useState(false);
   const searchDock = useRef<HTMLDivElement>(null), searchInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -382,9 +380,8 @@ export default function SkyExplorer() {
   const readout = viewCoordinates;
   return <main>
     <div
-      className={`search-dock${searchOpen || query ? ' is-searching' : ''}${advancedOpen ? ' dock-hidden' : ''}`}
+      className={`search-dock${searchOpen || query ? ' is-searching' : ''}`}
       ref={searchDock}
-      style={advancedOpen ? { opacity: 0, pointerEvents: 'none', visibility: 'hidden' } : undefined}
       onKeyDown={event => { if (event.key === 'Escape') { setSearchOpen(false); searchInput.current?.focus(); } }}
     >
       <form onSubmit={search}>
@@ -440,7 +437,7 @@ export default function SkyExplorer() {
                         <SpaceTargetIcon type={item.type} />
                       ) : (
                         <span className="target-icon-badge coord-badge">
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#e1e1e1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <circle cx="12" cy="12" r="9" />
                             <circle cx="12" cy="12" r="3" />
                             <line x1="12" y1="3" x2="12" y2="7" />
@@ -519,23 +516,7 @@ export default function SkyExplorer() {
       />
       <div className="map-top">
         <div className="map-top-left">
-          <ImageMath
-            frame={frame}
-            bands={bands}
-            coordinates={coordinates}
-            targetName={target?.name ?? 'Your sky region'}
-            gaiaEnabled={gaiaEnabled}
-            wiseEnabled={wiseEnabled}
-            onToggleGaia={() => setGaiaEnabled(!gaiaEnabled)}
-            onToggleWise={() => setWiseEnabled(!wiseEnabled)}
-            onSelectBand={(b) => onBands([b])}
-            onSelectBands={onBands}
-            onSelectCoords={(ra, dec) => updateCoordinates(ra, dec)}
-            onOpenChange={setAdvancedOpen}
-          />
-          {!advancedOpen && (
-            <div className="map-coordinate">ICRS <span>{readout.ra.toFixed(4)}°, {readout.dec >= 0 ? '+' : ''}{readout.dec.toFixed(4)}°</span></div>
-          )}
+          <div className="map-coordinate">ICRS <span>{readout.ra.toFixed(4)}°, {readout.dec >= 0 ? '+' : ''}{readout.dec.toFixed(4)}°</span></div>
         </div>
       </div>
       <div className="map-tools">
