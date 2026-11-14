@@ -519,3 +519,35 @@ def test_sequence_rejects_out_of_range(aws_client, monkeypatch, tmp_path, query)
     else:
         r = aws_client.get(f"/api/sequence?{base}&detector=6&{query}")
     assert r.status_code == 422
+
+
+def test_sequence_by_wavelength_filters_on_predicted_wavelength(aws_client, monkeypatch, tmp_path):
+    members, _ = seq_setup(monkeypatch, tmp_path)
+    # s0..s4 at 4.40, 4.50, 4.60, 4.70, 4.80; far at 4.61; the detector-2 one at 1.30
+    table = dict(zip([m.uri for m in members], [4.40, 4.50, 4.60, 4.70, 4.80, 4.61, 1.30]))
+    monkeypatch.setattr(app_module, "exposure_wavelengths",
+                        lambda exposures, ra, dec: [table[e.uri] for e in exposures])
+    body = aws_client.get(f"/api/sequence?{SEQ}&wavelength=4.6&width=0.03").json()
+    got = [(e["uri"].rsplit("/", 1)[1], e["wavelength_um"]) for e in body["exposures"]]
+    assert got == [("s1.fits", 4.5), ("s2.fits", 4.6), ("s3.fits", 4.7), ("far.fits", 4.61)]
+    assert body["sequence"]["wavelength"] == 4.6
+    other = aws_client.get(f"/api/sequence?{SEQ}&wavelength=1.3&width=0.03").json()
+    assert [e["detector"] for e in other["exposures"]] == [2]
+    assert other["cell"] != body["cell"]
+
+
+def test_wavelength_median_only_mixes_frames_in_the_window(aws_client, monkeypatch, tmp_path):
+    members, asked = seq_setup(monkeypatch, tmp_path)
+    table = dict(zip([m.uri for m in members], [4.40, 4.50, 4.60, 4.70, 4.80, 4.61, 1.30]))
+    monkeypatch.setattr(app_module, "exposure_wavelengths",
+                        lambda exposures, ra, dec: [table[e.uri] for e in exposures])
+    r = aws_client.get(f"/api/frame.png?uri=ibe/data/spherex/s2.fits&{SEQ}&roll=4"
+                       "&wavelength=4.6&width=0.03")
+    assert json.loads(r.headers["x-frame-meta"])["stack"] == 3
+    assert sorted(u.rsplit("/", 1)[1] for u in asked) == ["s1.fits", "s2.fits", "s3.fits"]
+
+
+def test_sequence_needs_exactly_one_of_detector_and_wavelength(aws_client, monkeypatch, tmp_path):
+    seq_setup(monkeypatch, tmp_path)
+    assert aws_client.get(f"/api/sequence?{SEQ}").status_code == 422
+    assert aws_client.get(f"/api/sequence?{SEQ}&detector=6&wavelength=4.6").status_code == 422
