@@ -3,13 +3,13 @@
 Network script, not part of the test suite. Runs the footprint query for
 Barnard's Star and saves the raw csv response to tests/fixtures/.
 
-    uv run python scripts/record_tap_fixture.py
+    uv run python scripts/data/record_tap_fixture.py
 """
 
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

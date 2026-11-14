@@ -2,7 +2,7 @@
 
 Network: the local server only (which downloads from the AWS mirror). Usage:
 
-    uv run python scripts/prewarm_stacks.py [key ...] [--server http://127.0.0.1:8000]
+    uv run python scripts/data/prewarm_stacks.py [key ...] [--server http://127.0.0.1:8000]
                                             [--fov 0.15] [--workers 6]
 
 For each target it asks `/api/view?stack=1` at today's position and requests every

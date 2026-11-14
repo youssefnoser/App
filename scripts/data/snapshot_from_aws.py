@@ -2,7 +2,7 @@
 
 Network: the public bucket `nasa-irsa-spherex` only. Usage:
 
-    uv run python scripts/snapshot_from_aws.py [--releases dr1 qr3] [--threads 48]
+    uv run python scripts/data/snapshot_from_aws.py [--releases dr1 qr3] [--threads 48]
                                                [--processes 3] [--limit N]
 
 Step 1 lists every Level-2 file of the releases (DR1 and QR3 together are the

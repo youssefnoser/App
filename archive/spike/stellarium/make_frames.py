@@ -5,7 +5,7 @@ Network use is allowed here (scripts/manual checks only, never in tests).
 Output goes to .cache/spike-frames/ (gitignored).
 
 Run: uv run --with numpy --with astropy --with scipy --with pillow \
-         python spike/stellarium/make_frames.py
+         python archive/spike/stellarium/make_frames.py
 """
 import csv
 import json
@@ -24,11 +24,11 @@ from scipy.ndimage import map_coordinates
 
 warnings.filterwarnings("ignore")
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
+ROOT = pathlib.Path(__file__).resolve().parents[3]
 OUT = ROOT / ".cache" / "spike-frames"
 OUT.mkdir(parents=True, exist_ok=True)
 
-# Barnard's Star, same values the prototype used (prototype/fetch.py).
+# Barnard's Star, same values the prototype used (archive/prototype/fetch.py).
 # Only used to pick a query centre; the patch itself is fixed sky.
 STAR = SkyCoord(269.45207 * u.deg, 4.69339 * u.deg,
                 pm_ra_cosdec=-798.58 * u.mas / u.yr, pm_dec=10328.12 * u.mas / u.yr,

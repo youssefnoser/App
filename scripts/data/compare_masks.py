@@ -2,7 +2,7 @@
 
 Answers "what did the fix change?" with pixels rather than words. Usage:
 
-    uv run python scripts/compare_masks.py [key] [--out .cache/compare]
+    uv run python scripts/data/compare_masks.py [key] [--out .cache/compare]
 
 Row 1 is the IRSA mosaic rule (ES 3.4.3, blank every flagged pixel); row 2 is
 what the page now draws (unusable bits only, plus TRANSIENT/SUR_ERROR kept where

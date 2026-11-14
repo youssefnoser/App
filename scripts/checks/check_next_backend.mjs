@@ -1,4 +1,4 @@
-import { chromium } from '../web/node_modules/@playwright/test/index.mjs';
+import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { mkdir } from 'node:fs/promises';
 const browser = await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
 try {

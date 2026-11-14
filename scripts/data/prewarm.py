@@ -2,7 +2,7 @@
 
 Network on a cold cache (IRSA cutout service), nothing else. Usage:
 
-    uv run python scripts/prewarm.py [key ...] [--fov 0.15] [--workers 8]
+    uv run python scripts/data/prewarm.py [key ...] [--fov 0.15] [--workers 8]
 
 For each target it takes the position for the current date, asks `_exposures_for_cell`
 (disk index first, IRSA TAP second), picks the first batch (one exposure per

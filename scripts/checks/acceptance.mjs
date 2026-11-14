@@ -1,7 +1,7 @@
 // Browser acceptance check for the SPHEREx blink page, on real IRSA data.
 //
 // Needs the server running: uv run uvicorn server.app:app --port 8000
-// Usage: node scripts/acceptance.mjs [base-url]
+// Usage: node scripts/checks/acceptance.mjs [base-url]
 // Env: CDP_PORT=<port> uses an already running Chromium instead of starting one.
 //      OUT_DIR overrides the screenshot folder (default .cache/acceptance).
 //

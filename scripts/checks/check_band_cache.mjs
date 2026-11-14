@@ -1,4 +1,4 @@
-import { chromium, expect } from '../web/node_modules/@playwright/test/index.mjs';
+import { chromium, expect } from '../../web/node_modules/@playwright/test/index.mjs';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});

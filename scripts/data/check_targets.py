@@ -2,7 +2,7 @@
 
 Network, not part of the test suite. Usage:
 
-    uv run python scripts/check_targets.py [key ...]
+    uv run python scripts/data/check_targets.py [key ...]
 
 Prints, per target, how many exposures cover the propagated 2026 position, how
 they group into visits, which detectors are present, and the date range. `SPHEREX_INSECURE_TLS=1`

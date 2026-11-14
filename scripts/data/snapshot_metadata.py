@@ -2,7 +2,7 @@
 
 Network: IRSA TAP only. Usage:
 
-    uv run python scripts/snapshot_metadata.py [--days 30] [--jobs 4] [--poll 10]
+    uv run python scripts/data/snapshot_metadata.py [--days 30] [--jobs 4] [--poll 10]
 
 The table is pulled in time windows (default 30 days of `time_bounds_lower`) as
 queued TAP jobs, at most `--jobs` at once. IRSA's job queue can be slow and its

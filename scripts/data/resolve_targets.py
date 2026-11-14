@@ -3,7 +3,7 @@
 Network, not part of the test suite (AGENTS.md). Run it to refresh
 `server/targets.py` when a target needs re-verification:
 
-    uv run python scripts/resolve_targets.py
+    uv run python scripts/data/resolve_targets.py
 
 Positions and proper motions come from SIMBAD's own ASCII output (ICRS, J2000,
 2020yCat.1350....0G for the four Gaia-calibrated stars). SIMBAD's main host

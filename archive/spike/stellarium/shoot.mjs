@@ -1,5 +1,5 @@
 // THROWAWAY SPIKE helper: drive headless Chromium over CDP, run steps, save screenshots.
-// Usage: node spike/stellarium/shoot.mjs <url> <outdir> '<json list of [label, js-to-eval]>'
+// Usage: node archive/spike/stellarium/shoot.mjs <url> <outdir> '<json list of [label, js-to-eval]>'
 import { writeFileSync } from 'node:fs';
 
 const [url, outdir, stepsJson] = process.argv.slice(2);

@@ -80,7 +80,7 @@ StelWebEngine({
     // Step 4: our frames as calibrated photos, one visible at a time.
     let meta;
     try { meta = await (await fetch(FRAMES + 'frames.json')).json(); }
-    catch (e) { say('No frames found. Run spike/stellarium/make_frames.py first.'); return; }
+    catch (e) { say('No frames found. Run archive/spike/stellarium/make_frames.py first.'); return; }
     const layer = stel.createLayer({ id: 'spherex-frames', z: 7, visible: true });
     const cal = { ra: meta.ra, dec: meta.dec, orientation: 0, pixscale: meta.pixscale_arcsec };
     const photos = meta.frames.map((f, i) => layer.add('photo', {
