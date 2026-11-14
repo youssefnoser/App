@@ -99,7 +99,11 @@ from `/engine/`.
 | `web/js/sky.js` | Engine bootstrap shared by both pages: script loading, equatorial airless view, SPHEREx HiPS background, RA/Dec read/set, engine-matching screen projection for the target marker |
 | `web/public/engine/` | Committed copy of the engine build; `npm run sync-engine` (also run before `dev` and `build`) refreshes it from `vendor/stellarium-web-engine/build` |
 | `web/js/backend-sky.js` | Frame loading on the shared sky, reusing the legacy `Loader`, `PhotoCache`, timeline and hash format; sequence queries, progressive PNG loading, rolling medians, cancellation and north-up calibration. Frames are keyed per sequence box and earlier boxes stay loaded after a pan; the layer hides only when zoomed out past frame scale. The blink runs on one box: the loaded box that holds the whole canvas (most frames wins, the current box on a tie). Only that box is drawn and its exposures are the timeline, because two boxes drawn over each other sit on different pixel grids and shift the picture. Until the box being loaded has the exposure on screen (which it downloads first), every box on screen is drawn and the timeline carries over. The exposure the user chose is kept through reloads. A loaded box that still covers the view is asked for again instead of a new one, so the caches answer without a download |
-| `web/js/backend-sky.d.ts` | Typed adapter interface for React |
+| `web/js/backend-sky.d.ts` | Typed adapter interface for React, including `onProgress` ({phase, done, total, failed, cleaned}: finding, loading, cleaning while raw frames are swapped for their rolling medians, ready, failed, empty, error, zoomed-out, hidden) |
+| `web/js/viewbox.d.ts` | Types for `viewbox.js` (frame-box geometry, `LOAD_FOV_DEG`) |
+| `web/components/ZoomRuler.tsx` | Straight zoom control: a log ruler of the field of view sliding under a fixed needle (drag, wheel, arrow/Page/Home/End keys); marks the 30′ stretch where frames load and says what the loader is doing |
+| `web/lib/zoom-ruler.ts` | Ruler geometry: field ↔ offset, ticks and labels, readout text, 1.25× steps |
+| `web/lib/load-progress.ts` | Plain-language title, detail and progress fractions for `onProgress`, shown on the time dial (arcs and status line) and under the ruler |
 | `web/lib/backend-bands.ts` | Map the existing selected bands into backend wavelength windows or detector queries |
 | `web/app/api/[...path]/route.ts` | Same-origin streaming proxy for the backend's target, view, patch, sequence and frame endpoints; preserves `X-Frame-Meta` |
 

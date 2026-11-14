@@ -2801,3 +2801,59 @@ html, body, main, .sky {
 .bands-toggle-icon, .bands-chevron { display: inline-flex; align-items: center; justify-content: center; }
 .band-counter-controls button, #bands-panel #bands-close { display: inline-flex; align-items: center; justify-content: center; }
 .bands-toggle-icon svg, .bands-chevron svg, .band-counter-controls button svg, #bands-close svg { flex-shrink: 0; }
+
+/* --- Zoom ruler (components/ZoomRuler.tsx): a straight tape under a fixed needle --- */
+.field-ruler {
+  --ruler-accent: #38bdf8;
+  position: absolute; right: 22px; top: 50%; transform: translateY(-38%);
+  z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 7px;
+  width: 96px; pointer-events: none;
+}
+.field-ruler-window {
+  pointer-events: auto; position: relative; width: 74px; height: 220px; color: #b6c4d6;
+  background: none; border: 0; border-radius: 10px; box-shadow: none;
+  cursor: grab; touch-action: none; overflow: hidden;
+  filter: drop-shadow(0 1px 3px #000) drop-shadow(0 0 6px rgba(0, 0, 0, .8));
+}
+.field-ruler.is-sliding .field-ruler-window { cursor: grabbing; }
+.field-ruler-window:focus { outline: none; }
+.field-ruler-window:focus-visible { outline: 2px solid #a0c8ff; outline-offset: 3px; }
+.field-ruler-window svg { display: block; pointer-events: none;
+  -webkit-mask-image: linear-gradient(transparent 0, #000 24%, #000 76%, transparent 100%);
+  mask-image: linear-gradient(transparent 0, #000 24%, #000 76%, transparent 100%); }
+.field-ruler-tape { transition: transform 180ms cubic-bezier(.2, .8, .2, 1); }
+.field-ruler.is-sliding .field-ruler-tape { transition: none; }
+.field-ruler-tape text { fill: currentColor; font: 9px 'DM Sans', sans-serif; letter-spacing: .3px; }
+.field-ruler-tape .field-ruler-limit { fill: var(--ruler-accent); font-weight: 700; }
+/* The stretch of the ruler where SPHEREx frames load. */
+.field-ruler-frames { fill: var(--ruler-accent); opacity: .35; transition: opacity .2s ease; }
+.field-ruler.in-frames .field-ruler-frames { opacity: .9; filter: drop-shadow(0 0 4px var(--ruler-accent)); }
+.field-ruler-needle { color: var(--ruler-accent); filter: drop-shadow(0 0 6px rgba(56, 189, 248, .75)); }
+.field-ruler-window:hover .field-ruler-needle { filter: drop-shadow(0 0 9px var(--ruler-accent)); }
+.field-ruler-readout { display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font: 16px 'Space Grotesk', sans-serif; color: #e0f2fe; text-shadow: 0 2px 10px #000, 0 0 14px rgba(56, 189, 248, .4); }
+.field-ruler-readout small { font: 6px 'DM Sans', sans-serif; letter-spacing: 2px; color: #0284c7; }
+.field-ruler-note { pointer-events: auto; max-width: 96px; text-align: center; font: 9px/1.35 'DM Sans', sans-serif;
+  color: #7f93ad; text-shadow: 0 1px 6px #000; }
+.field-ruler.in-frames .field-ruler-note { color: #bae6fd; }
+.field-ruler.in-frames[data-tone='warn'] .field-ruler-note { color: #fda4af; }
+
+/* --- Frame loading on the time dial (Rotor progress arcs and status line) --- */
+.dial-progress path { fill: none; stroke-width: 3; stroke-linecap: round; }
+.dial-progress-track { stroke: rgba(255, 255, 255, .08); }
+.dial-progress-loaded { stroke: rgba(245, 158, 11, .45); transition: d .3s ease; }
+.dial-progress-cleaned { stroke: #fbbf24; filter: drop-shadow(0 0 3px rgba(251, 191, 36, .8)); transition: d .3s ease; }
+.rotary-console .time-section .half-readout:has(.load-status) { top: -50px; }
+.rotary-console .time-section .half-readout small.load-status { pointer-events: auto; cursor: help; letter-spacing: 1.2px !important; color: #fcd34d !important; }
+.rotary-console .time-section .half-readout small.load-status[data-tone='busy']::before { content: ''; display: inline-block; width: 5px; height: 5px;
+  margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: middle; animation: load-pulse 1.1s ease-in-out infinite; }
+.rotary-console .time-section .half-readout small.load-status[data-tone='ok'] { color: #a3a3a3 !important; }
+.rotary-console .time-section .half-readout small.load-status[data-tone='warn'] { color: #fda4af !important; }
+@keyframes load-pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) {
+  .field-ruler-tape, .dial-progress path { transition: none; }
+  .rotary-console .time-section .half-readout small.load-status::before { animation: none; }
+}
+@media (max-width: 700px) {
+  .field-ruler { right: 8px; top: 34%; }
+}

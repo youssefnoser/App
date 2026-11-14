@@ -80,42 +80,21 @@ test('Stellarium canvas renders, target crosshair displays, and features functio
   const filterStyle = await canvas.evaluate(el => getComputedStyle(el).filter);
   expect(filterStyle).not.toBe('none');
 
-  // 8. Google Maps style +/- zoom buttons with extended zoom capacity
-  const zoomSection = page.locator('.zoom-section');
-  await expect(zoomSection).toBeVisible();
-  const zoomInBtn = page.getByRole('button', { name: 'Zoom in' });
-  const zoomOutBtn = page.getByRole('button', { name: 'Zoom out' });
-  await expect(zoomInBtn).toBeVisible();
-  await expect(zoomOutBtn).toBeVisible();
-  const mapBottom = page.locator('.map-bottom');
-  await expect(mapBottom).toContainText('5.0 arcmin');
-  await zoomInBtn.click();
-  await expect(mapBottom).toContainText('3.6 arcmin');
-  await zoomOutBtn.click();
-  await expect(mapBottom).toContainText('5.0 arcmin');
-
-  // Test extended zoom out (wide sky view below previous 0.6 limit down to 0.25)
-  await zoomOutBtn.click(); // to 0.6 -> 8.3 arcmin
-  await expect(mapBottom).toContainText('8.3 arcmin');
-  await zoomOutBtn.click(); // to 0.4 -> 12.5 arcmin
-  await expect(mapBottom).toContainText('12.5 arcmin');
-  await zoomOutBtn.click(); // to 0.25 -> 20.0 arcmin
-  await expect(mapBottom).toContainText('20.0 arcmin');
-  await expect(zoomOutBtn).toBeEnabled();
+  // 8. Straight zoom ruler: arrow keys step 1.25 times, Home is the deepest zoom.
+  const ruler = page.getByRole('slider', { name: 'Field of view' });
+  const fieldReadout = page.locator('.field-ruler-readout');
+  await expect(ruler).toBeVisible();
+  await expect(fieldReadout).toContainText('5.0′');
+  await ruler.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(fieldReadout).toContainText('4.0′');
+  await page.keyboard.press('ArrowDown');
+  await expect(fieldReadout).toContainText('5.0′');
+  await page.keyboard.press('PageDown'); // 5′ × 1.25^4
+  await expect(fieldReadout).toContainText('12′');
   await page.screenshot({ path: 'test-results/desktop-zoom-out-wide.png' });
-
-  // Test extended zoom in (deep sky magnification beyond previous 4.0 limit)
-  await zoomInBtn.click(); // to 0.4
-  await zoomInBtn.click(); // to 0.6
-  await zoomInBtn.click(); // to 1.0
-  await zoomInBtn.click(); // to 1.4
-  await zoomInBtn.click(); // to 2.0
-  await zoomInBtn.click(); // to 2.8
-  await zoomInBtn.click(); // to 4.0
-  await zoomInBtn.click(); // to 6.0 (exceeds previous 4.0 limit!)
-  await zoomInBtn.click(); // to 9.0
-  await zoomInBtn.click(); // to 14.0
-  await expect(zoomInBtn).toBeEnabled();
+  await page.keyboard.press('Home');
+  await expect(fieldReadout).toContainText('12″');
   await page.screenshot({ path: 'test-results/desktop-zoom-in-deep.png' });
 
   // 9. Recenter button

@@ -495,3 +495,49 @@ test('returning to a loaded box does not rebuild photos that already show the cl
  assert.equal(live.size,2);
  controller.destroy();
 });
+
+test('progress reports counts through finding, loading, cleaning and ready', async () => {
+ const progress=[];
+ const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
+ const stel={core:{fov:.15*Math.PI/180,observer:{yaw:30*Math.PI/180,pitch:20*Math.PI/180},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const exposures=['a','b','c'].map((uri,i)=>({uri,mjd:i,date:`2025-01-0${i+1}`,detector:1,first:true,cells:[-1]}));
+ const fetchFn=async(url)=>{
+   await new Promise(resolve=>setTimeout(resolve,1));
+   if(url.includes('/sequence')) return Response.json({cell:-1,sequence:{ra:30,dec:20,fov:.2,wavelength:1.25,width:.05},cells:[{pix:-1,ra:30,dec:20,ring:0}],exposures});
+   return new Response(new Uint8Array([1]));
+ };
+ const controller=createBackendSky(skyOf(stel),{fetchFn,onProgress:p=>progress.push(p),schedule:()=>0,cancel:()=>{}});
+ controller.setBands([{wavelength:1.25,width:.05}],0);
+ await controller.refresh({ra:30,dec:20},.15);
+ await new Promise(resolve=>setTimeout(resolve,40));
+ const phases=[...new Set(progress.map(p=>p.phase))];
+ assert.deepEqual(phases,['finding','loading','cleaning','ready']);
+ assert.deepEqual(progress.at(-1),{phase:'ready',done:3,total:3,failed:0,cleaned:3});
+ assert(progress.some(p=>p.phase==='loading' && p.done===1 && p.total===3));
+ assert(progress.some(p=>p.phase==='cleaning' && p.cleaned===1));
+ controller.destroy();
+});
+
+test('progress says when frames cannot load: zoomed out, backend down, failed frames, raw only', async () => {
+ const progress=[];
+ const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
+ const stel={core:{fov:Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ let backendUp=false;
+ const exposures=['a','bad'].map((uri,i)=>({uri,mjd:i,date:`2025-01-0${i+1}`,detector:1,first:true,cells:[-1]}));
+ const fetchFn=async(url)=>{
+   if(!backendUp) return new Response('',{status:502});
+   if(url.includes('/sequence')) return Response.json({cell:-1,sequence:{ra:30,dec:20,fov:.2,detector:1},cells:[{pix:-1,ra:30,dec:20,ring:0}],exposures});
+   return url.includes('uri=bad') ? new Response('',{status:502}) : new Response(new Uint8Array([1]));
+ };
+ const controller=createBackendSky(skyOf(stel),{fetchFn,onProgress:p=>progress.push(p),schedule:()=>0,cancel:()=>{}});
+ controller.setFill(false);
+ await controller.refresh({ra:30,dec:20},1);
+ assert.equal(progress.at(-1).phase,'zoomed-out');
+ await controller.refresh({ra:30,dec:20},.15);
+ assert.equal(progress.at(-1).phase,'error');
+ backendUp=true;
+ await controller.refresh({ra:30,dec:20},.15);
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.deepEqual(progress.at(-1),{phase:'failed',done:1,total:2,failed:1,cleaned:0});
+ controller.destroy();
+});
