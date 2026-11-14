@@ -32,6 +32,10 @@ assert.match(describeProgress(p('zoomed-out')).detail, /30′/);
 assert.equal(describeProgress(p('zoomed-out')).tone, 'idle');
 assert.match(describeProgress(p('empty')).title, /No exposures/);
 assert.match(describeProgress(p('finding')).title, /Finding/);
-assert.match(describeProgress(p('hidden')).detail, /Infrared/);
+// Hiding frames leaves the SPHEREx all-sky map, which is still infrared:
+// the copy must not call it visible light.
+assert.match(describeProgress(p('hidden')).title, /frames hidden/i);
+assert.doesNotMatch(describeProgress(p('hidden')).title + describeProgress(p('hidden')).detail, /visible|Infrared/i);
+assert.match(describeProgress(p('hidden')).detail, /Show SPHEREx frames/);
 // Nothing reported yet reads as finding, not as an error.
 assert.match(describeProgress(null).title, /Finding/);
