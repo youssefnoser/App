@@ -38,63 +38,67 @@ There are two pages:
 - **The main app**: the interface people use.
 - **The test bench**: a plain page the backend serves, for checking the data and debugging.
 
-## Quick start
+## Run it
 
-You need Git, Python 3.11 or newer with [uv](https://docs.astral.sh/uv/), and Node.js 22.14 or newer.
+There are two pages, the **main app** and the **test bench**, and both need a backend. You can use the team's hosted
+backend or run your own.
+
+| | Hosted backend (`http://130.61.174.88:8000`) | Local backend (`http://localhost:8000`) |
+|---|---|---|
+| Test bench | Open http://130.61.174.88:8000/. Nothing to install. | Run the backend, then open http://localhost:8000/ |
+| Main app | Node only, no Python | Python and Node |
+
+The hosted backend runs whatever version was last deployed to it, so it can be behind this repo.
+
+### Prerequisites
+
+- **Main app:** Node.js 22.14 or newer, with npm.
+- **Local backend:** Python 3.11 or newer, with [uv](https://docs.astral.sh/uv/).
+- **Test bench on a local backend:** also [Emscripten](https://emscripten.org/docs/getting_started/downloads.html)
+  and [SCons](https://scons.org/), to build the sky engine once.
+
+Get the code:
 
 ```bash
 git clone --recurse-submodules <repo-url>
 cd <repo-folder>
-uv sync                                                      # backend dependencies
-(cd web && npm install)                                      # main app dependencies
-echo "SPHEREX_BACKEND_URL=http://127.0.0.1:8000" > web/.env.local
 ```
 
-Then start two terminals:
+If you cloned without `--recurse-submodules`, run `git submodule update --init`.
 
-```bash
-uv run uvicorn server.app:app --reload --port 8000           # terminal 1: backend
-```
+### A. Use the hosted backend
 
-```bash
-cd web && npm run dev                                        # terminal 2: main app
-```
+**Test bench:** open http://130.61.174.88:8000/ in a browser. That's all.
 
-Open http://localhost:5173 and pick Barnard's Star.
-
-The first view of a spot takes a while. The backend downloads whole exposure files from the public SPHEREx mirror on AWS
-(no account needed) and caches them in `.cache/`. Later views of the same spot are quick.
-
-## Running each part
-
-### Backend
-
-```bash
-uv run uvicorn server.app:app --reload --port 8000
-```
-
-Run this from the repo root. The backend is ready when it prints `Application startup complete`, and you can check it
-at http://localhost:8000/health. Stop it with Ctrl+C.
-
-### Main app
+**Main app:**
 
 ```bash
 cd web
-npm run dev                  # development, reloads on save
-npm run build && npm start   # production build
+npm install
+echo "SPHEREX_BACKEND_URL=http://130.61.174.88:8000" > .env.local
+npm run dev
 ```
 
-Both serve at http://localhost:5173. The app sends its `/api` requests to the backend named in `web/.env.local`:
+Open http://localhost:5173. Next.js passes the app's `/api` requests on to the hosted backend, so the browser never
+talks to it directly. The hosted backend is also the default when `web/.env.local` is missing.
 
-- Your own backend: `SPHEREX_BACKEND_URL=http://127.0.0.1:8000`
-- The team's hosted backend: `cp web/.env.example web/.env.local`. You then don't need to run a backend yourself.
+### B. Run the backend locally
 
-### Test bench
+**1. Start the backend.** From the repo root:
 
-There's nothing extra to start: with the backend running, open http://localhost:8000.
+```bash
+uv sync                                               # first time only
+uv run uvicorn server.app:app --reload --port 8000
+```
 
-The test bench draws the sky with our fork of Stellarium Web Engine in `vendor/`, which has to be built once. The
-build needs [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and [SCons](https://scons.org/):
+It is ready when it prints `Application startup complete`. Check it at http://localhost:8000/health, and stop it
+with Ctrl+C.
+
+The first view of a spot is slow. The backend downloads whole exposure files from the public SPHEREx mirror on AWS (no
+account needed) and caches them in `.cache/`. Later views of the same spot are quick.
+
+**2. Test bench.** The backend serves the test bench itself, at http://localhost:8000/. The first time, build the sky
+engine it uses (our Stellarium Web Engine fork in `vendor/`):
 
 ```bash
 source <path-to-emsdk>/emsdk_env.sh
@@ -102,8 +106,23 @@ cd vendor/stellarium-web-engine
 make js
 ```
 
-Then restart the backend. Without this build the page opens, but the sky view doesn't load. The main app doesn't
-need this build, because it ships its own copy in `web/public/stellarium/`.
+Then restart the backend. Without this build, the page opens but the sky view doesn't load. The main app doesn't
+need the build, because it ships its own copy in `web/public/stellarium/`.
+
+**3. Main app.** In a second terminal:
+
+```bash
+cd web
+npm install                                           # first time only
+echo "SPHEREX_BACKEND_URL=http://127.0.0.1:8000" > .env.local
+npm run dev
+```
+
+Open http://localhost:5173. For a production build, use `npm run build && npm start` on the same port.
+
+### Switching the main app between backends
+
+Edit `SPHEREX_BACKEND_URL` in `web/.env.local`, then stop and restart `npm run dev`.
 
 ### Tests
 
@@ -134,7 +153,7 @@ instead of from AWS.
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
-| `SPHEREX_BACKEND_URL` | team backend | Set in `web/.env.local`. The backend the main app talks to. |
+| `SPHEREX_BACKEND_URL` | `http://130.61.174.88:8000` | Set in `web/.env.local`. The backend the main app talks to. |
 | `SPHEREX_CACHE_DIR` | `.cache` | Where downloads, cut-outs and the exposure list are stored. |
 | `SPHEREX_EXPOSURE_CACHE_GB` | `20` | Size limit for downloaded exposure files. The least recently used are removed first. |
 | `SPHEREX_SOURCE` | `aws` | Set to `irsa` to fetch one small cut-out per patch from IRSA instead of whole files from AWS. |
