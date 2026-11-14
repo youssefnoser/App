@@ -7,9 +7,12 @@ import { Loader, priorityList } from './queue.js';
 import { PhotoCache } from './photos.js';
 import { toHash } from './state.js';
 import { buildSteps } from './timeline.js';
-import { frameBox, boxCovers, boxInside, boxOnScreen, LOAD_FOV_DEG } from './viewbox.js';
+import { frameBox, boxCovers, boxOnScreen, LOAD_FOV_DEG } from './viewbox.js';
 
 const DEG = 180 / Math.PI;
+// Slack when testing whether a loaded box holds the canvas: 0.36 arcsec, a ninth of
+// a frame pixel. The server rounds a box centre to 5 decimals of a degree.
+const HOLD_SLACK_DEG = 1e-4;
 export function frameAddress(sequence, uri, clean = false) {
   const p = new URLSearchParams({uri, ra:String(sequence.ra), dec:String(sequence.dec), fov:String(sequence.fov), roll:clean ? '4' : '0'});
   if (clean && sequence.wavelength != null) {
@@ -41,6 +44,9 @@ export function createBackendSky(sky, {
   let windows = [{wavelength:1.25,width:.05}], bandKey = '', lastRequest = null;
   let view = null, steps = [], currentUri = null, previous = null, lastMove = 0, settled = false;
   let visible = true, fill = true, upgrades = [], upgrading = 0, loadingPaused = false;
+  // wanted: the exposure the user is looking at ({uri, mjd}); it is shown whenever a
+  // box has it. drawn: the boxes whose photos are drawn (a Set of cells).
+  let wanted = null, drawn = null;
   const frames = new Map(), metadata = new Map(); // frames: key -> box; metadata: uri -> X-Frame-Meta
   const boxes = new Map(); // cell -> {ra, dec, fov, bandKey}: every box asked for so far
   const report = (message) => { if (!disposed) onStatus(message); };
@@ -65,17 +71,36 @@ export function createBackendSky(sky, {
     }
     return out;
   }
-  // Uris that every loaded box on screen can show, so a blink step never leaves
-  // part of the view empty. A box with nothing loaded yet does not count, and a
-  // box wholly inside another box holding the uri is hidden behind it anyway.
-  function playableUris() {
+  // The boxes the blink runs on, and the uris it may step through.
+  //
+  // One loaded box that holds the whole canvas, when there is one: each of its
+  // frames fills the view, and drawing a single box keeps the picture still from
+  // step to step. Two boxes are resampled on different pixel grids, so drawing one
+  // over the other moves the sky by a fraction of a pixel wherever they overlap.
+  // Boxes left from earlier views, perhaps abandoned half loaded, take nothing away.
+  // Of several such boxes the one with the most frames wins, the current box on a tie.
+  //
+  // The box being loaded waits its turn until it has the exposure on screen, so the
+  // picture does not hop to whichever frame happens to arrive first.
+  //
+  // With no such box (the new box is still empty), every box on screen is drawn
+  // and all their uris are steps, so the picture carries over while it loads.
+  function stage() {
     const canvas = stel.canvas, centre = sky.viewCentre(), fov = sky.fovDeg();
-    const shown = [...loadedByBox()].filter(([cell])=>
-      boxOnScreen(boxes.get(cell),centre,fov,canvas.clientWidth,canvas.clientHeight));
-    const all = new Set(shown.flatMap(([,uris])=>[...uris]));
-    return new Set([...all].filter(uri=>shown.every(([cell,uris])=>uris.has(uri) ||
-      shown.some(([other,theirs])=>other!==cell && theirs.has(uri) && boxInside(boxes.get(cell),boxes.get(other))))));
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+    const loaded = [...loadedByBox()];
+    let best = null;
+    for (const [cell,uris] of loaded) {
+      const box = boxes.get(cell);
+      if (!boxCovers({...box,fov:box.fov+HOLD_SLACK_DEG},centre,fov,width,height)) continue;
+      if (cell===view?.cell && wanted && !uris.has(wanted.uri) && loader?.isPending(`${cell}|${wanted.uri}`)) continue;
+      if (!best || uris.size>best.uris.size || (uris.size===best.uris.size && cell===view?.cell)) best = {cell,uris};
+    }
+    if (best) return {cells:new Set([best.cell]),uris:best.uris};
+    const shown = loaded.filter(([cell])=>boxOnScreen(boxes.get(cell),centre,fov,width,height));
+    return {cells:new Set(shown.map(([cell])=>cell)),uris:new Set(shown.flatMap(([,uris])=>[...uris]))};
   }
+  const show = () => photos.showOnly(visible ? currentUri : null,drawn);
   // The loaded box of the current bands that holds the whole canvas and the most
   // frames, if any: asking for it again costs nothing, every cache already has it.
   function coveringBox(centre,fov,width,height) {
@@ -88,12 +113,16 @@ export function createBackendSky(sky, {
   }
   function notify() {
     if (disposed || !view) return;
-    const playable = playableUris();
-    steps = buildSteps(view.exposures).filter(step=>playable.has(step.uri)).map(step=>({...step,meta:metadata.get(step.uri) || null}));
-    if (!steps.some(step=>step.uri===currentUri)) currentUri = steps[0]?.uri ?? null;
-    const index = Math.max(0,steps.findIndex(step=>step.uri===currentUri));
-    assets.pin(assetFor(currentUri));
-    photos.showOnly(visible ? currentUri : null);
+    const {cells,uris} = stage();
+    drawn = cells;
+    steps = buildSteps(view.exposures).filter(step=>uris.has(step.uri)).map(step=>({...step,meta:metadata.get(step.uri) || null}));
+    // The wanted exposure if it is a step, else the step nearest to it in time.
+    wanted ??= steps[0] ? {uri:steps[0].uri,mjd:steps[0].mjd} : null;
+    const current = steps.find(step=>step.uri===wanted?.uri) ?? (steps.length
+      ? steps.reduce((near,step)=>Math.abs(step.mjd-wanted.mjd)<Math.abs(near.mjd-wanted.mjd) ? step : near) : null);
+    currentUri = current?.uri ?? null;
+    const index = Math.max(0,steps.indexOf(current));
+    show();
     onTimeline({steps,index});
     const {done,total,failed} = loader.stats;
     report(failed ? `${done} of ${total} frames loaded. ${failed} failed. Recenter to retry.` :
@@ -109,11 +138,10 @@ export function createBackendSky(sky, {
       upgrading++;
       const signal = request.signal;
       const url = frameAddress(sequence,item.uri,true);
-      assets.load(url,signal).then(asset=>{
+      assets.load(url,signal,item.pix).then(asset=>{
         if (disposed || token !== generation || !fill) return;
         metadata.set(item.uri,asset.meta);
         applied.set(item.key,url);
-        if(currentUri===item.uri) assets.pin(url);
         photos.replace(item.pix,item.uri,asset.url,
           {ra:sequence.ra,dec:sequence.dec,orientation:0,pixscale:3.075});
         const entry=photos.entries.get(item.key);
@@ -123,10 +151,17 @@ export function createBackendSky(sky, {
     }
   }
   function makeLoader(token) {
-    return new Loader({concurrency:8,fetchFn:(item,signal)=>assets.load(frameAddress(frames.get(item.key),item.uri),signal),
+    return new Loader({concurrency:8,fetchFn:(item,signal)=>assets.load(frameAddress(frames.get(item.key),item.uri),signal,item.pix),
     onLoaded:(item,asset)=>{
       if (disposed || token!==generation) return;
       const sequence=frames.get(item.key);
+      // A box asked for again whose photo already shows the cleaned frame: leave it.
+      // Rebuilding the photo would only make it flicker.
+      if (fill && photos.entries.has(item.key) && applied.get(item.key)===frameAddress(sequence,item.uri,true)) {
+        photos.ensure(item.pix,item.uri,asset.url,{ra:sequence.ra,dec:sequence.dec,orientation:0,pixscale:3.075});
+        notify();pumpUpgrades();
+        return;
+      }
       metadata.set(item.uri,asset.meta);
       applied.set(item.key,asset.address);
       photos.ensure(item.pix,item.uri,asset.url,
@@ -183,8 +218,11 @@ export function createBackendSky(sky, {
         frames.set(`${first.cell}|${exposure.uri}`,answer.sequence);
       }
       view={...first,exposures:[...exposures.values()]};
+      assets.pin(first.cell); // the box on screen is never evicted
       loader=makeLoader(token);
-      loader.setQueue(priorityList(view,new Set()));
+      // The exposure on screen first, so this box can take over the picture soonest.
+      const queue=priorityList(view,new Set());
+      loader.setQueue([...queue.filter(item=>item.uri===wanted?.uri),...queue.filter(item=>item.uri!==wanted?.uri)]);
       notify();
     } catch(error) {
       if(disposed || token!==generation || signal.aborted) return;
@@ -197,7 +235,11 @@ export function createBackendSky(sky, {
     const centre=sky.viewCentre(), fov=sky.fovDeg();
     const canvas=stel.canvas;
     const moved=!previous || Math.abs(centre.ra-previous.ra)>1e-6 || Math.abs(centre.dec-previous.dec)>1e-6 || Math.abs(fov-previous.fov)>1e-6;
-    if(moved) {previous={...centre,fov};lastMove=now;settled=false;onView(centre);}
+    if(moved) {
+      previous={...centre,fov};lastMove=now;settled=false;onView(centre);
+      // While the view moves, the box drawn may stop holding the canvas: draw its neighbours too.
+      if(view && fov<LOAD_FOV_DEG) {drawn=stage().cells;show();}
+    }
     // Leaving frame scale cancels the queue. Invalidate its coverage too, so a
     // quick return to the same box cannot mistake a cancelled queue for a live one.
     const paused = fov >= LOAD_FOV_DEG || !visible;
@@ -249,7 +291,7 @@ export function createBackendSky(sky, {
           const address=frameAddress(sequence,item.uri);
           applied.set(item.key,address);
           const token=generation;
-          assets.load(address,request.signal).then(asset=>{
+          assets.load(address,request.signal,item.pix).then(asset=>{
             if(disposed || token!==generation || fill) return;
             photos.replace(item.pix,item.uri,asset.url,{ra:sequence.ra,dec:sequence.dec,orientation:0,pixscale:3.075});
             const entry=photos.entries.get(item.key);if(entry) entry.assetKey=address;
@@ -259,20 +301,22 @@ export function createBackendSky(sky, {
       }
     },
     showFrame(index) {
-      currentUri=steps[index]?.uri ?? steps[0]?.uri ?? null;
+      const step=steps[index] ?? steps[0];
+      // A step other than the one on screen is the user's (or the blink's) choice.
+      if (step && step.uri!==currentUri) wanted={uri:step.uri,mjd:step.mjd};
+      currentUri=step?.uri ?? null;
       const sequence=frames.get(keyOf(currentUri));
       const address=assetFor(currentUri);
-      assets.pin(address);
       if (sequence && view && address && loader.done.has(`${view.cell}|${currentUri}`) && !photos.entries.has(`${view.cell}|${currentUri}`)) {
         const uri=currentUri,pix=view.cell,token=generation;
-        assets.load(address,request.signal).then(asset=>{
+        assets.load(address,request.signal,pix).then(asset=>{
           if(disposed || token!==generation || currentUri!==uri) return;
           photos.ensure(pix,uri,asset.url,{ra:sequence.ra,dec:sequence.dec,orientation:0,pixscale:3.075});
           photos.entries.get(`${pix}|${uri}`).assetKey=address;
-          photos.showOnly(visible?currentUri:null);
+          show();
         }).catch(()=>{});
       }
-      photos.showOnly(visible?currentUri:null);
+      show();
       writeHash(index);
     },
     retry() {lastRequest=null;},

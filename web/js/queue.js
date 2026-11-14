@@ -101,6 +101,13 @@ export class Loader {
     };
   }
 
+  /** True while the item with this key is waiting or being fetched (not aborted). */
+  isPending(key) {
+    if (this.waiting.some((it) => it.key === key)) return true;
+    for (const entry of this.inflight) if (!entry.cancelled && entry.item.key === key) return true;
+    return false;
+  }
+
   /**
    * Replace the waiting queue with `items` (already in priority order).
    * Duplicate keys are queued once. Items already done, failed or in flight
