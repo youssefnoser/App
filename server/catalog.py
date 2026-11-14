@@ -104,7 +104,6 @@ class Catalog:
         self._centres = np.zeros((0, 3))
         self._cos_radius = np.zeros(0)
         self.complete = False
-        self.through_mjd: float | None = None
 
     def _load(self) -> bool:
         try:
@@ -118,10 +117,6 @@ class Catalog:
         try:
             data = conn.execute("SELECT id, cx, cy, cz, radius_deg FROM exposures").fetchall()
             self.complete = get_meta(conn, "complete") == "1"
-            try:
-                self.through_mjd = float(get_meta(conn, "through_mjd"))
-            except (TypeError, ValueError):
-                self.through_mjd = None
         except sqlite3.Error:
             return False
         finally:
@@ -136,14 +131,35 @@ class Catalog:
     def status(self) -> dict:
         """What the snapshot holds, for /health: whether it is complete, the date
         (MJD) it was filled up to, and how many exposures it lists. With no
-        snapshot: not complete, no date, no exposures."""
-        with self._lock:
-            loaded = self._load()
+        snapshot, or one locked by a writer for over a second: not complete, no
+        date, no exposures.
+
+        Reads the meta table and a row count only. It neither reloads the lookup
+        index nor takes the lookup lock, so a health probe while the snapshot is
+        being filled cannot stall /api/view.
+        """
+        empty = {"complete": False, "through_mjd": None, "exposures": 0}
+        if not self.path.exists():
+            return empty
+        try:
+            conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=1)
+        except sqlite3.Error:
+            return empty
+        try:
+            through = get_meta(conn, "through_mjd")
             return {
-                "complete": bool(loaded and self.complete),
-                "through_mjd": self.through_mjd if loaded else None,
-                "exposures": int(self._ids.size) if loaded else 0,
+                "complete": get_meta(conn, "complete") == "1",
+                "through_mjd": float(through) if through else None,
+                # max(id) equals the row count, since rows are only ever added or
+                # updated in place, and it is one index lookup where count(*)
+                # reads the whole table (2 s on the 1.6 million row snapshot).
+                "exposures": int(conn.execute(
+                    "SELECT coalesce(max(id), 0) FROM exposures").fetchone()[0]),
             }
+        except (sqlite3.Error, ValueError):
+            return empty
+        finally:
+            conn.close()
 
     def find(self, ra: float, dec: float) -> list[Exposure] | None:
         """Exposures whose footprint contains (ra, dec), sorted by mjd.

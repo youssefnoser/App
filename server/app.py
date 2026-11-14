@@ -33,7 +33,7 @@ from server import diskcache
 from server.catalog import catalog
 from server.cutouts import CutoutError, cache_dir, check_uri, fetch_cutout
 from server.irsa import Exposure, IrsaError, find_exposures
-from server.mirror import fetch_exposure, open_frame, prefetch
+from server.mirror import fetch_exposure, frame_meta, open_frame, prefetch
 from server.ranges import fetch_crop
 from server.wavelengths import exposure_wavelengths
 from server.patches import (
@@ -67,7 +67,7 @@ RENDER_VERSION = 2
 
 # A cell's exposure list fetched from IRSA (no complete snapshot) is reused for a
 # day, so a new release reaches the page within a day without asking IRSA per view.
-CELL_CACHE_MAX_AGE_S = 86400.0
+CELL_CACHE_MAX_AGE_S = diskcache.TAP_MAX_AGE_S
 
 # What the page reads when a frame cannot be had. Sequence frames and wavelength
 # maps always come from the mirror (server/ranges.py); patch frames follow
@@ -77,7 +77,7 @@ IRSA_DOWN = "The SPHEREx archive (IRSA) did not return this frame. Try again."
 
 def _prune_soon() -> None:
     """Hold the rendered caches under their size cap (server/diskcache.py)."""
-    diskcache.prune_in_background(cache_dir(), CELL_CACHE_MAX_AGE_S)
+    diskcache.prune_in_background(cache_dir())
 
 
 @asynccontextmanager
@@ -130,8 +130,12 @@ def _write_atomic(path: Path, data: bytes) -> None:
 
 def _read_cached(png_path: Path, meta_path: Path) -> tuple[bytes, dict]:
     """A rendered frame and its metadata from disk, marked as just used. Raises
-    OSError or ValueError on a miss (either file missing, or the JSON is bad)."""
+    OSError or ValueError on a miss: either file missing, bad JSON, or metadata
+    written before frames carried `mjd_start` (rendered again and overwritten in
+    place, so no RENDER_VERSION bump strands the old cache)."""
     out = png_path.read_bytes(), json.loads(meta_path.read_text())
+    if "mjd_start" not in out[1]:
+        raise ValueError("metadata from before start/end times")
     diskcache.touch(png_path)
     diskcache.touch(meta_path)
     return out
@@ -291,15 +295,7 @@ def _render_frame(pix: int, uri: str) -> tuple[bytes, dict]:
                 warnings.simplefilter("ignore")
                 grid = resample_north_up(image, WCS(header), ra, dec, PATCH_N)
                 wavelength_um, _ = wavelength_at(hdul, ra, dec)
-            meta = {
-                # mjd is the average (MJD-AVG); the blink order uses the start.
-                "mjd": float(header["MJD-AVG"]),
-                "mjd_start": float(header["MJD-BEG"]),
-                "mjd_end": float(header["MJD-END"]),
-                "detector": int(header["DETECTOR"]),
-                "wavelength_um": wavelength_um,
-                "obs_id": str(header["OBSID"]),
-            }
+            meta = {**frame_meta(header), "wavelength_um": wavelength_um}
         return to_png(grid), meta
     except Exception as err:  # corrupt or incomplete file: KeyError, ValueError, OSError, astropy errors
         Path(path).unlink(missing_ok=True)
@@ -323,21 +319,24 @@ def render_frame_cached(pix: int, uri: str) -> tuple[bytes, dict]:
     return png, meta
 
 
-def _stack_source_ok(cell: int, uri: str) -> bool:
-    """True when `uri` is listed for `cell`, i.e. `cell` is the centre cell of a
-    view the caller actually got this stack uri from. Anything else is a caller
-    mistake (mixing responses), not an archive failure, so it is a 422, not 502.
-    A cell with no list at all is left to the renderer, which reports 502."""
-    exposures = _exposures_for_cell(cell)
-    return not exposures or any(e.uri == uri for e in exposures)
+class NotInStack(Exception):
+    """The stack cell's list does not hold the uri: the caller mixed a stack uri
+    with a view it did not come from. A caller mistake, so 422, not 502."""
 
 
 def _stack_members(cell: int, uri: str) -> list[Exposure]:
-    """Every exposure of the same visit and detector as `uri`, from `cell`'s list."""
-    for visit in group_visits(_exposures_for_cell(cell)):
+    """Every exposure of the same visit and detector as `uri`, from `cell`'s list.
+
+    Raises NotInStack when the list has exposures but not `uri`. An empty list
+    gives [], which the renderer reports as a missing frame (502).
+    """
+    exposures = _exposures_for_cell(cell)
+    for visit in group_visits(exposures):
         detector = next((e.detector for e in visit if e.uri == uri), None)
         if detector is not None:
             return [e for e in visit if e.detector == detector]
+    if exposures:
+        raise NotInStack(uri)
     return []
 
 
@@ -371,11 +370,11 @@ def _render_stack(pix: int, uri: str, cell: int) -> tuple[bytes, dict]:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pixels stay NaN
         median = np.nanmedian(np.stack([d[0] for d in done]), axis=0)
-    times = sorted(d[2]["mjd"] for d in done)
     meta = {
-        "mjd": float(np.median(times)),
-        "mjd_start": times[0],
-        "mjd_end": times[-1],
+        "mjd": float(np.median([d[2]["mjd"] for d in done])),
+        # the span the median covers: first exposure's start to last one's end
+        "mjd_start": min(d[2]["mjd_start"] for d in done),
+        "mjd_end": max(d[2]["mjd_end"] for d in done),
         "detector": done[0][2]["detector"],
         "wavelength_um": float(np.median([d[1] for d in done])),
         "obs_id": "",
@@ -407,18 +406,16 @@ def patch_frame(
         check_uri(uri)
     except ValueError as err:
         raise HTTPException(422, "That is not a SPHEREx file path.") from err
-    if stack is not None and not _stack_source_ok(stack, uri):
-        # stack is the view's centre cell, so a uri unknown there means the
-        # caller mixed a stack uri with a view it did not come from.
-        raise HTTPException(
-            422, f"The stack parameter must be the centre cell of the view that "
-                 f"listed this exposure; this exposure is not part of cell {stack}.")
 
     try:
         if stack is None:
             png, meta = render_frame_cached(pix, uri)
         else:
             png, meta = render_stack_cached(pix, uri, stack)
+    except NotInStack as err:
+        raise HTTPException(
+            422, f"The stack parameter must be the centre cell of the view that "
+                 f"listed this exposure; this exposure is not part of cell {stack}.") from err
     except IrsaError as err:
         raise HTTPException(502, "IRSA did not answer. Try again in a moment.") from err
     except CutoutError as err:
@@ -470,14 +467,17 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
     and two requests for the same exposure share one fetch.
     """
     key = (uri, ra, dec, fov)
+    name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}".encode()).hexdigest()
+    path = cache_dir() / "grids" / f"v{RENDER_VERSION}" / name[:2] / f"{name}.npz"
     with _grids_guard:
         hit = _grids.pop(key, None)
         if hit is not None:
             _grids[key] = hit
-            return hit
-        lock = _grid_locks.setdefault(key, threading.Lock())
-    name = hashlib.sha1(f"{uri}|{ra}|{dec}|{fov}".encode()).hexdigest()
-    path = cache_dir() / "grids" / f"v{RENDER_VERSION}" / name[:2] / f"{name}.npz"
+        else:
+            lock = _grid_locks.setdefault(key, threading.Lock())
+    if hit is not None:
+        diskcache.touch(path)  # in use, so the disk copy is the last to be pruned
+        return hit
     with lock:
         with _grids_guard:
             hit = _grids.get(key)
@@ -486,6 +486,8 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
         try:
             with np.load(path) as saved:
                 out = (saved["grid"], float(saved["wavelength"]), json.loads(str(saved["meta"])))
+            if "mjd_start" not in out[2]:  # saved before start/end times: fetch again
+                raise KeyError("mjd_start")
             diskcache.touch(path)
         except (OSError, ValueError, KeyError):
             with fetch_crop(uri, ra, dec, fov) as hdul, warnings.catch_warnings():
@@ -494,11 +496,7 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
                 grid = resample_north_up(
                     science_image(hdul), WCS(header), ra, dec, _seq_size(fov))
                 wavelength_um, _ = wavelength_at(hdul, ra, dec)
-                meta = {"mjd": float(header["MJD-AVG"]),
-                        "mjd_start": float(header["MJD-BEG"]),
-                        "mjd_end": float(header["MJD-END"]),
-                        "detector": int(header["DETECTOR"]),
-                        "obs_id": str(header["OBSID"])}
+                meta = frame_meta(header)
             out = (grid, wavelength_um, meta)
             buffer = io.BytesIO()
             np.savez(buffer, grid=grid, wavelength=wavelength_um, meta=json.dumps(meta))

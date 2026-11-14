@@ -103,4 +103,5 @@ def fetch_cutout(
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
         raise
+    diskcache.note_write(lambda: diskcache.prune_in_background(cache_dir()))
     return path

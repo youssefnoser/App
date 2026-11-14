@@ -230,6 +230,19 @@ def cut(path: Path, ra: float, dec: float, size_deg: float) -> fits.HDUList:
         raise CutoutError(f"The cached exposure could not be read: {exc}") from exc
 
 
+def frame_meta(header) -> dict:
+    """The X-Frame-Meta fields an exposure's IMAGE header gives, the same for the
+    mirror, IRSA and sequence paths. `mjd` is the average (MJD-AVG); `mjd_start`
+    and `mjd_end` are MJD-BEG and MJD-END. Exposure lists use the start."""
+    return {
+        "mjd": float(header["MJD-AVG"]),
+        "mjd_start": float(header["MJD-BEG"]),
+        "mjd_end": float(header["MJD-END"]),
+        "detector": int(header["DETECTOR"]),
+        "obs_id": str(header["OBSID"]),
+    }
+
+
 class Frame:
     """One cached exposure, opened once: WCS objects built and pixel arrays mapped.
 
@@ -244,15 +257,7 @@ class Frame:
             warnings.simplefilter("ignore")  # SIP without -SIP CTYPE; applying it is intended
             header = hdul["IMAGE"].header
             self.shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
-            self.meta = {
-                # mjd is the average (MJD-AVG); start and end are MJD-BEG and
-                # MJD-END. A blink sorts by start, the header keeps all three.
-                "mjd": float(header["MJD-AVG"]),
-                "mjd_start": float(header["MJD-BEG"]),
-                "mjd_end": float(header["MJD-END"]),
-                "detector": int(header["DETECTOR"]),
-                "obs_id": str(header["OBSID"]),
-            }
+            self.meta = frame_meta(header)
             self.sky = WCS(header)
             self.wave = WCS(header, fobj=hdul, key="W")
             self.wave.sip = None
