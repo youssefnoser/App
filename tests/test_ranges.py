@@ -30,6 +30,8 @@ def range_server(body: bytes, log: list | None = None, fail_after: int | None = 
             log.append(spec)
         if fail_after is not None and len(log or []) > fail_after:
             return httpx.Response(503)
+        if not spec.startswith("-") and int(spec.split("-")[0]) >= len(body):
+            return httpx.Response(416)  # a guessed position beyond a small test file
         if spec.startswith("-"):
             return httpx.Response(206, content=body[-int(spec[1:]):])
         start, stop = spec.split("-")
