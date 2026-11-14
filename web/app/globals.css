@@ -2801,3 +2801,33 @@ html, body, main, .sky {
 .bands-toggle-icon, .bands-chevron { display: inline-flex; align-items: center; justify-content: center; }
 .band-counter-controls button, #bands-panel #bands-close { display: inline-flex; align-items: center; justify-content: center; }
 .bands-toggle-icon svg, .bands-chevron svg, .band-counter-controls button svg, #bands-close svg { flex-shrink: 0; }
+
+/* Performance: the sky canvas redraws every frame, and every filter or backdrop
+   blur drawn over it is recomputed with it. These cut the main app to about
+   7 frames per second (150 ms a frame against 33 ms in the test bench), which made
+   panning and zooming jump. The panels are already 90%+ opaque, so the blur barely
+   showed. Keep effects like these off anything that sits over the canvas. */
+.half-dial svg,
+.rotary-console .time-section .half-indicator,
+.speed-section .half-indicator {
+  filter: none !important;
+}
+.half-dial text {
+  paint-order: stroke;
+  stroke: #000;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.map-coordinate,
+.map-top-left .map-coordinate,
+.object-label > div,
+.view-switch,
+.map-tools,
+.band-control > #bands-toggle,
+.map-zoom-controls,
+.rotary-console .zoom-section.map-zoom-controls,
+.image-math-toggle,
+.search-dock,
+.search-dock * {
+  backdrop-filter: none !important;
+}
