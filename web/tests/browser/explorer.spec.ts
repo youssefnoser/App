@@ -101,7 +101,7 @@ test('Stellarium canvas renders, target crosshair displays, and features functio
   await expect(mapBottom).toContainText('12.5 arcmin');
   await zoomOutBtn.click(); // to 0.25 -> 20.0 arcmin
   await expect(mapBottom).toContainText('20.0 arcmin');
-  await expect(zoomOutBtn).toBeDisabled();
+  await expect(zoomOutBtn).toBeEnabled();
   await page.screenshot({ path: 'test-results/desktop-zoom-out-wide.png' });
 
   // Test extended zoom in (deep sky magnification beyond previous 4.0 limit)

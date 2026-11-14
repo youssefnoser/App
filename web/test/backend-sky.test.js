@@ -133,3 +133,66 @@ test('revisiting a cached selection makes no new network requests and excludes o
  assert.equal(calls.length,cold);
  controller.destroy();
 });
+
+
+test('wide canvas requests the full diagonal box beyond the old half-degree cap', async () => {
+ const addresses=[];
+ const layer={visible:true,add:()=>({}),remove:()=>{}};
+ const stel={core:{fov:.3*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const controller=createBackendSky(stel,{fetchFn:async url=>{
+   addresses.push(url);
+   return Response.json({cell:-1,sequence:{ra:30,dec:20,fov:.671},exposures:[]});
+ },schedule:()=>0,cancel:()=>{}});
+ await controller.refresh({ra:30,dec:20},.3,Math.hypot(1600,800)/800);
+ assert.equal(new URL(addresses[0],'http://localhost').searchParams.get('fov'),'0.6710');
+ await controller.refresh({ra:30,dec:20},105);
+ assert.equal(addresses.length,1);
+ controller.destroy();
+});
+
+
+test('zooming briefly past the frame threshold resumes every pending batch on return', async () => {
+ let tick;
+ const timelines=[], started=[];
+ const pending=[];
+ const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
+ const stel={canvas:{clientWidth:800,clientHeight:800},core:{fov:.15*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const exposures=Array.from({length:12},(_,i)=>({uri:`frame-${i}`,mjd:i,date:'2025-01-01',detector:2,first:true,cells:[-1]}));
+ const controller=createBackendSky(stel,{schedule:fn=>{tick=fn;return 0;},cancel:()=>{},onTimeline:t=>timelines.push(t),fetchFn:async(url,{signal})=>{
+   if(url.includes('/sequence')) return Response.json({cell:-1,sequence:{ra:180/Math.PI,dec:0,fov:.3},cells:[{pix:-1,ring:0}],exposures});
+   started.push(url);
+   await new Promise(resolve=>{pending.push(resolve);signal.addEventListener('abort',resolve,{once:true});});
+   return new Response('pixels');
+ }});
+ controller.setFill(false);
+ await controller.refresh({ra:180/Math.PI,dec:0},.15,Math.SQRT2);
+ tick(0);
+ stel.core.fov=1*Math.PI/180; tick(10);
+ stel.core.fov=.15*Math.PI/180; tick(20); tick(400);
+ // Release both cancelled and resumed work, including the next queue batch.
+ for(let i=0;i<8;i++) {
+   pending.splice(0).forEach(resolve=>resolve());
+   await new Promise(resolve=>setTimeout(resolve,0));
+ }
+ assert.equal(timelines.at(-1).steps.length,12);
+ assert(started.some(url=>url.includes('frame-11')));
+ controller.destroy();
+});
+
+
+test('a frame box that no longer covers the canvas is hidden during pan and zoom', async () => {
+ let tick;
+ const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
+ const stel={canvas:{clientWidth:1600,clientHeight:800},core:{fov:.1*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const controller=createBackendSky(stel,{schedule:fn=>{tick=fn;return 0;},cancel:()=>{},fetchFn:async()=>Response.json({cell:-1,sequence:{ra:180/Math.PI,dec:0,fov:.224},cells:[{pix:-1,ring:0}],exposures:[]})});
+ await controller.refresh({ra:180/Math.PI,dec:0},.1,Math.sqrt(5));
+ tick(0);assert.equal(layer.visible,true);
+ // Drag outside the box, before the 300 ms settle timer can request a new one.
+ stel.core.observer.pitch=.1*Math.PI/180;
+ tick(10);assert.equal(layer.visible,false,'must not expose the old frame edge over the survey');
+ stel.core.observer.pitch=0;
+ tick(20);assert.equal(layer.visible,true);
+ stel.core.fov=.2*Math.PI/180;
+ tick(30);assert.equal(layer.visible,false,'zooming out must not expose the old frame border');
+ controller.destroy();
+});
