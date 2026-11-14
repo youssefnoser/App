@@ -120,6 +120,9 @@ export function createBackendSky(sky, {
     // aspect is the canvas diagonal divided by its short side.
     const boxFov = frameBox(fov, Math.sqrt(Math.max(0, aspect * aspect - 1)), 1);
     if (boxFov == null) {report('Zoom in to load SPHEREx frames for this part of the sky.');return;}
+    // The box being asked for. The settle check tests coverage against this one,
+    // not the box still on screen, so it is requested once while it loads.
+    lastRequest.box = {ra:centre.ra, dec:centre.dec, fov:boxFov};
     try {
       // Four metadata queries at a time; crop downloads use the original cap of eight.
       const answers = new Array(windows.length);
@@ -171,7 +174,7 @@ export function createBackendSky(sky, {
     if(!moved && now-lastMove>=300) {
       const dx=lastRequest ? Math.abs(((centre.ra-lastRequest.ra+540)%360)-180)*Math.cos(centre.dec/DEG) : Infinity;
       const dy=lastRequest ? Math.abs(centre.dec-lastRequest.dec) : Infinity;
-      const box=view?.sequence;
+      const box=lastRequest?.box;
       const needsFrames = box && fov < LOAD_FOV_DEG
         ? !boxCovers(box,centre,fov,canvas.clientWidth,canvas.clientHeight)
         : dx>.0125 || dy>.0125 || (lastRequest && Math.abs(fov/lastRequest.fov-1)>.1);

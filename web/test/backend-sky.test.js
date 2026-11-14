@@ -242,3 +242,28 @@ test('a new box after a pan adds its frames next to the old ones instead of repl
  assert(photos.filter(p=>p.visible).length>=2,'box A and box B show together');
  controller.destroy();
 });
+
+
+test('zooming out past the loaded box asks for the bigger box once, not on every frame', async () => {
+ let tick;
+ const sequenceCalls=[];
+ const pending=[];
+ const layer={visible:true,add:(_type,args)=>({...args}),remove:()=>{}};
+ const stel={canvas:{clientWidth:800,clientHeight:800},core:{fov:.1*Math.PI/180,observer:{yaw:1,pitch:0},dss:{}},observer:{},s2c:(a,b)=>[a,b],c2s:v=>v,anp:v=>v,convertFrame:(_a,_b,_c,v)=>v,createLayer:()=>layer};
+ const controller=createBackendSky(skyOf(stel),{schedule:fn=>{tick=fn;return 0;},cancel:()=>{},fetchFn:async(url,{signal}={})=>{
+   const fov=Number(new URL(url,'http://localhost').searchParams.get('fov'));
+   sequenceCalls.push(fov);
+   // The first box answers at once, the bigger one takes a while.
+   if(sequenceCalls.length>1) await new Promise(resolve=>{pending.push(resolve);signal?.addEventListener('abort',resolve,{once:true});});
+   return Response.json({cell:-sequenceCalls.length,sequence:{ra:180/Math.PI,dec:0,fov},cells:[{pix:-sequenceCalls.length,ring:0}],exposures:[]});
+ }});
+ tick(0); tick(400); // settle: box for the 0.1 deg view
+ await new Promise(resolve=>setTimeout(resolve,5));
+ assert.equal(sequenceCalls.length,1);
+ stel.core.fov=.18*Math.PI/180; tick(500); // zoom out past that box
+ for(const t of [900,1000,1100,1500,3000]) tick(t); // settled; the bigger box is still on its way
+ assert.equal(sequenceCalls.length,2,'one request for the bigger box, not one per frame');
+ assert(sequenceCalls[1]>sequenceCalls[0]);
+ pending.forEach(resolve=>resolve());
+ controller.destroy();
+});
