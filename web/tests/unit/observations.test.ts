@@ -1,5 +1,5 @@
 ﻿import assert from 'node:assert/strict';
-import { sampleDataset, validateDataset, combineImages, imageOperation } from '../lib/observations.ts';
+import { sampleDataset, validateDataset, combineImages, imageOperation } from '../../lib/observations.ts';
 const data = sampleDataset();
 assert.equal(validateDataset(data).observations.length, 612);
 const a = data.observations[0], b = data.observations[102];

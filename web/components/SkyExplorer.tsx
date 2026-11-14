@@ -10,8 +10,8 @@ import {
   type Camera,
   type Point,
 } from '@/lib/sky';
-import { cachedFetch } from '@/js/frontend-cache.js';
-import type { BackendTimeline } from '@/js/backend-sky.js';
+import { cachedFetch } from '@/shared/frontend-cache.js';
+import type { BackendTimeline } from '@/shared/backend-sky.js';
 import BandSelector from './BandSelector';
 import { getBandWavelength } from '@/lib/spectral';
 import Rotor from './Rotor';

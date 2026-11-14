@@ -1,5 +1,5 @@
 import { getBandWavelength } from './spectral.ts';
-import type { BandWindow } from '../js/backend-sky.js';
+import type { BandWindow } from '../shared/backend-sky.js';
 
 // Keep the existing band picker's mapping; request contiguous selected ranges
 // together, without including unselected channels between disjoint ranges.

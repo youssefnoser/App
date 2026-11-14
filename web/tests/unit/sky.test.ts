@@ -8,8 +8,8 @@ import {
   getNextZoomIn,
   getNextZoomOut,
   type Camera,
-} from '../lib/sky.ts';
-import { svgNumber } from '../lib/rotor.ts';
+} from '../../lib/sky.ts';
+import { svgNumber } from '../../lib/rotor.ts';
 
 // Test zoom levels and steps
 assert.equal(getNextZoomIn(1.0), 1.4);
@@ -52,7 +52,7 @@ for (const [server, client] of [
 ]) assert.equal(svgNumber(server), svgNumber(client));
 console.log('PASS: reported server/browser rotor coordinates serialize identically.');
 
-const { sequenceWindows } = await import('../lib/backend-bands.ts');
+const { sequenceWindows } = await import('../../lib/backend-bands.ts');
 assert.deepEqual(sequenceWindows([22], 1.25, .05), [{ wavelength: 1.25, width: .05 }]);
 assert.equal((sequenceWindows([1], undefined, .05)[0] as {width:number}).width, .05);
 assert((sequenceWindows([1], undefined, 0)[0] as {width:number}).width < .02);

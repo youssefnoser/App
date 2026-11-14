@@ -6,7 +6,7 @@ import {
   getExternalCatalogMatches,
   getObservationMetadata,
   MOLECULAR_FEATURES,
-} from '../lib/spectral.ts';
+} from '../../lib/spectral.ts';
 
 // 1. Validate all 102 bands and wavelength coverage
 const bands = getAllBands();

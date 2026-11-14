@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { GET } from '../app/api/[...path]/route.ts';
-import { getBandWavelength } from '../lib/spectral.ts';
-import { selectedBandWindows } from '../lib/backend-bands.ts';
+import { GET } from '../../app/api/[...path]/route.ts';
+import { getBandWavelength } from '../../lib/spectral.ts';
+import { selectedBandWindows } from '../../lib/backend-bands.ts';
 
 assert.deepEqual(selectedBandWindows(Array.from({length:102},(_,i)=>i+1)),[1,2,3,4,5,6].map(detector=>({detector})));
 assert.equal(selectedBandWindows([1,2,4]).length,2);

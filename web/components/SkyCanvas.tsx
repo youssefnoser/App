@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createBackendSky, pointSky, readSkyCentre, HIPS, type BackendTimeline } from '@/js/backend-sky.js';
+import { createBackendSky, pointSky, readSkyCentre, HIPS, type BackendTimeline } from '@/shared/backend-sky.js';
 import { sequenceWindows } from '@/lib/backend-bands';
 import { MIN_ZOOM, MAX_ZOOM, type Camera, type Point } from '@/lib/sky';
 
