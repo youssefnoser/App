@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPHEREx sky (debug)</title>
+<style>
+  :root { --bg: #0b0d12; --panel: rgba(18, 21, 30, .92); --line: #2a3040; --text: #d7dbe6; --dim: #8a91a3;
+          --accent: #6cb6ff; --ok: #6fd08c; --bad: #ff7b72; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #sky { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+           box-shadow: 0 6px 24px rgba(0,0,0,.4); }
+  #controls { left: 12px; bottom: 12px; width: 300px; padding: 10px 12px; max-height: calc(100% - 24px); overflow: auto; }
+  #controls h2, #debug h2 { margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+  #controls section { margin-top: 10px; }
+  label { display: block; color: var(--dim); font-size: 12px; margin-bottom: 3px; }
+  .row { display: flex; gap: 6px; align-items: center; }
+  input[type=number], select { width: 100%; background: #0f1219; color: var(--text); border: 1px solid var(--line);
+                               border-radius: 4px; padding: 4px 6px; font: inherit; }
+  input[type=range] { width: 100%; }
+  button { background: #1d2333; color: var(--text); border: 1px solid var(--line); border-radius: 4px;
+           padding: 4px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; }
+  .toggles label { color: var(--text); font-size: 13px; margin: 0; display: flex; gap: 6px; align-items: center; }
+  .note { color: var(--dim); font-size: 11px; margin-top: 4px; }
+  #debug { top: 12px; right: 12px; width: 330px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #debug header { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px;
+                  border-bottom: 1px solid var(--line); cursor: move; user-select: none; }
+  #debug header button { padding: 0 6px; font-size: 12px; }
+  #debug .body { padding: 6px 10px; }
+  #debug.collapsed .body { display: none; }
+  #debug dl { display: grid; grid-template-columns: 92px 1fr; gap: 1px 8px; margin: 0; }
+  #debug dt { color: var(--dim); }
+  #debug dd { margin: 0; overflow-wrap: anywhere; }
+  #log { margin-top: 6px; max-height: 140px; overflow: auto; border-top: 1px solid var(--line); padding-top: 4px; }
+  #log div { white-space: pre-wrap; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  footer { position: fixed; right: 12px; bottom: 8px; color: var(--dim); font-size: 11px; }
+  footer a { color: var(--dim); }
+  @media (max-width: 700px) { #controls { width: calc(100% - 24px); max-height: 45%; } #debug { width: calc(100% - 24px); } }
+</style>
+</head>
+<body>
+<canvas id="sky"></canvas>
+
+<div id="controls" class="panel">
+  <h2>Controls</h2>
+
+  <section>
+    <label for="preset">Go to</label>
+    <select id="preset">
+      <option value="">Pick a test target…</option>
+      <option value="269.4463,4.7677">Barnard's Star</option>
+      <option value="133.795129,-7.245147">WISE 0855</option>
+    </select>
+    <div class="row" style="margin-top:6px">
+      <input id="ra" type="number" step="any" placeholder="RA (deg)" aria-label="RA in degrees">
+      <input id="dec" type="number" step="any" placeholder="Dec (deg)" aria-label="Dec in degrees">
+      <button id="go">Go</button>
+    </div>
+  </section>
+
+  <section>
+    <label for="fov">Field of view: <span id="fovLabel"></span></label>
+    <input id="fov" type="range" min="-3" max="2.08" step="0.01">
+  </section>
+
+  <section>
+    <label for="band">SPHEREx wavelength: <span id="bandLabel">loading…</span></label>
+    <div class="row">
+      <button id="bandPrev" aria-label="Shorter wavelength">&lsaquo;</button>
+      <input id="band" type="range" min="0" max="101" step="1" value="88">
+      <button id="bandNext" aria-label="Longer wavelength">&rsaquo;</button>
+    </div>
+    <div class="note">Background is the SPHEREx all-sky map, averaged over a year. It does not show motion.</div>
+  </section>
+
+  <section>
+    <label>Layers</label>
+    <div class="toggles" id="toggles"></div>
+  </section>
+
+  <section class="row">
+    <button id="time">Pause time</button>
+    <button id="link">Copy link</button>
+  </section>
+</div>
+
+<div id="debug" class="panel">
+  <header id="debugHead"><h2>Debug</h2><span><button id="debugClear" title="Clear log">clear</button>
+    <button id="debugMin" title="Collapse (key D)">_</button></span></header>
+  <div class="body">
+    <dl>
+      <dt>fps</dt><dd id="d-fps">–</dd>
+      <dt>view RA</dt><dd id="d-ra">–</dd>
+      <dt>view Dec</dt><dd id="d-dec">–</dd>
+      <dt>fov</dt><dd id="d-fov">–</dd>
+      <dt>utc (MJD)</dt><dd id="d-utc">–</dd>
+      <dt>HiPS frame</dt><dd id="d-frame">–</dd>
+      <dt>HiPS url</dt><dd id="d-url">–</dd>
+      <dt>tiles</dt><dd id="d-tiles">0 ok, 0 failed</dd>
+      <dt>tile bytes</dt><dd id="d-bytes">0</dd>
+      <dt>last tile</dt><dd id="d-last">–</dd>
+    </dl>
+    <div id="log"></div>
+  </div>
+</div>
+
+<footer>Sky engine: <a href="https://github.com/Stellarium/stellarium-web-engine">Stellarium Web Engine</a> (AGPL-3.0)</footer>
+
+<script src="/vendor/stellarium-web-engine/build/stellarium-web-engine.js"></script>
+<script type="module">
+const ENGINE = '/vendor/stellarium-web-engine/';
+const SKYDATA = ENGINE + 'apps/test-skydata/';
+const BLANK = new Set([50, 51]);
+const D2R = Math.PI / 180;
+const $ = (id) => document.getElementById(id);
+
+// ---------- debug log ----------
+const logEl = $('log');
+function log(msg, cls) {
+  const line = document.createElement('div');
+  line.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
+  if (cls) line.className = cls;
+  logEl.append(line);
+  while (logEl.childElementCount > 200) logEl.firstChild.remove();
+  logEl.scrollTop = logEl.scrollHeight;
+}
+for (const level of ['warn', 'error']) {
+  const orig = console[level].bind(console);
+  console[level] = (...a) => { orig(...a); log(level + ': ' + a.map(String).join(' '), 'bad'); };
+}
+addEventListener('error', (e) => log('error: ' + e.message, 'bad'));
+addEventListener('unhandledrejection', (e) => log('promise: ' + e.reason, 'bad'));
+
+// ---------- tile stats (resource timing, no engine hooks needed) ----------
+const tiles = { ok: 0, bad: 0, bytes: 0 };
+new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) {
+    if (!e.name.includes('/hips/spherex/') || e.name.endsWith('/properties')) continue;
+    const status = e.responseStatus || 0;
+    if (status && status >= 400) { tiles.bad++; log(`tile ${status}: ${e.name.split('/hips/spherex/')[1]}`, 'bad'); }
+    else tiles.ok++;
+    tiles.bytes += e.transferSize || e.encodedBodySize || 0;
+    $('d-last').textContent = e.name.split('/hips/spherex/')[1] + ` (${Math.round(e.duration)} ms)`;
+  }
+  $('d-tiles').innerHTML = `<span class="ok">${tiles.ok} ok</span>, <span class="${tiles.bad ? 'bad' : ''}">${tiles.bad} failed</span>`;
+  $('d-bytes').textContent = (tiles.bytes / 1e6).toFixed(2) + ' MB';
+}).observe({ type: 'resource', buffered: true });
+
+// ---------- draggable, collapsible debug window ----------
+(function dragDebug() {
+  const box = $('debug'), head = $('debugHead');
+  let start = null;
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+    const r = box.getBoundingClientRect();
+    start = { x: e.clientX - r.left, y: e.clientY - r.top };
+    head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener('pointermove', (e) => {
+    if (!start) return;
+    box.style.left = Math.max(0, Math.min(innerWidth - 60, e.clientX - start.x)) + 'px';
+    box.style.top = Math.max(0, Math.min(innerHeight - 30, e.clientY - start.y)) + 'px';
+    box.style.right = 'auto';
+  });
+  head.addEventListener('pointerup', () => { start = null; });
+  $('debugMin').onclick = () => box.classList.toggle('collapsed');
+  $('debugClear').onclick = () => { logEl.textContent = ''; };
+  addEventListener('keydown', (e) => {
+    if ((e.key === 'd' || e.key === 'D') && !(e.target instanceof HTMLInputElement)) box.classList.toggle('collapsed');
+  });
+})();
+
+// ---------- hash state ----------
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  const num = (k) => { const v = parseFloat(p.get(k)); return Number.isFinite(v) ? v : null; };
+  let ra = num('ra'), dec = num('dec'), fov = num('fov'), band = num('band');
+  if (ra === null || ra < 0 || ra >= 360 || dec === null || dec < -90 || dec > 90) { ra = 269.4463; dec = 4.7677; }
+  if (fov === null || fov < 0.001 || fov > 120) fov = 1;
+  band = band === null ? 88 : Math.round(band);
+  if (band < 0 || band > 101 || BLANK.has(band)) band = 88;
+  return { ra, dec, fov, band };
+}
+const state = readHash();
+function writeHash() {
+  history.replaceState(null, '', `#ra=${state.ra.toFixed(5)}&dec=${state.dec.toFixed(5)}&fov=${+state.fov.toPrecision(4)}&band=${state.band}`);
+}
+
+// ---------- wavelengths ----------
+let wavelengths = [];
+fetch('/hips/spherex/properties').then((r) => {
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.text();
+}).then((t) => {
+  const line = t.split('\n').find((l) => l.startsWith('data_cube_crval3_arr'));
+  wavelengths = line ? line.split('=')[1].trim().split(/\s+/).map(Number) : [];
+  log(`properties: ${wavelengths.length} wavelengths`, 'ok');
+  updateBandLabel();
+}).catch((e) => log('The SPHEREx background could not be loaded (' + e.message + '). Stars still work.', 'bad'));
+
+function bandText(f) {
+  const det = Math.floor(f / 17) + 1;
+  const wl = wavelengths[f];
+  return (wl ? wl.toFixed(3) + ' µm' : 'frame ' + f) + ', detector ' + det;
+}
+function updateBandLabel() {
+  $('bandLabel').textContent = bandText(state.band);
+  $('band').value = state.band;
+  $('d-frame').textContent = state.band + ' (' + bandText(state.band) + ')';
+}
+
+// ---------- formatting ----------
+function hms(deg) {
+  const h = ((deg % 360) + 360) % 360 / 15, hh = Math.floor(h), m = (h - hh) * 60, mm = Math.floor(m), s = (m - mm) * 60;
+  return `${String(hh).padStart(2, '0')}h${String(mm).padStart(2, '0')}m${s.toFixed(2).padStart(5, '0')}s`;
+}
+function dms(deg) {
+  const sg = deg < 0 ? '-' : '+', a = Math.abs(deg), d = Math.floor(a), m = (a - d) * 60, mm = Math.floor(m), s = (m - mm) * 60;
+  return `${sg}${String(d).padStart(2, '0')}°${String(mm).padStart(2, '0')}'${s.toFixed(1).padStart(4, '0')}"`;
+}
+function fovText(deg) { return deg >= 1 ? deg.toFixed(2) + '°' : deg * 60 >= 1 ? (deg * 60).toFixed(2) + "'" : (deg * 3600).toFixed(1) + '"'; }
+
+// ---------- engine ----------
+StelWebEngine({
+  wasmFile: ENGINE + 'build/stellarium-web-engine.wasm',
+  canvas: $('sky'),
+  translateFn: (domain, str) => str,
+  onReady(stel) {
+    window.stel = stel; // for poking from the console
+    const core = stel.core;
+    log('engine ready', 'ok');
+    core.stars.addDataSource({ url: SKYDATA + 'stars' });
+    core.skycultures.addDataSource({ url: SKYDATA + 'skycultures/western', key: 'western' });
+    core.dsos.addDataSource({ url: SKYDATA + 'dso' });
+    core.milkyway.addDataSource({ url: SKYDATA + 'surveys/milkyway' });
+    core.landscapes.addDataSource({ url: SKYDATA + 'landscapes/guereins', key: 'guereins' });
+    stel.setFont('regular', ENGINE + 'apps/simple-html/static/fonts/Roboto-Regular.ttf', 1.38);
+    stel.setFont('bold', ENGINE + 'apps/simple-html/static/fonts/Roboto-Bold.ttf', 1.38);
+
+    core.atmosphere.visible = false;
+    core.landscapes.visible = false;
+    core.milkyway.visible = false;
+    core.time_speed = 0; // frozen: the view stays on the patch
+
+    const setBand = (f) => {
+      state.band = f;
+      const url = location.origin + '/hips/spherex/' + f;
+      core.dss.addDataSource({ url });
+      core.dss.visible = $('t-dss') ? $('t-dss').checked : true;
+      $('d-url').textContent = url;
+      updateBandLabel();
+      writeHash();
+      log('HiPS -> frame ' + f);
+    };
+
+    const pointAt = (ra, dec, fovDeg, dur = 1) => {
+      const icrf = stel.s2c(ra * D2R, dec * D2R);
+      const obs = stel.convertFrame(core.observer, 'ICRF', 'OBSERVED', icrf);
+      stel.lookAt(obs, dur);
+      stel.zoomTo(fovDeg * D2R, dur);
+      Object.assign(state, { ra, dec, fov: fovDeg });
+      $('ra').value = ra; $('dec').value = dec;
+      writeHash();
+      log(`go to ${ra.toFixed(4)}, ${dec.toFixed(4)}, fov ${fovText(fovDeg)}`);
+    };
+
+    // layer toggles: [id, label, getter, setter]
+    const toggles = [
+      ['dss', 'SPHEREx map', () => core.dss.visible, (v) => { core.dss.visible = v; }],
+      ['stars', 'Stars', () => core.stars.visible, (v) => { core.stars.visible = v; }],
+      ['dsos', 'Galaxies, nebulae', () => core.dsos.visible, (v) => { core.dsos.visible = v; }],
+      ['const', 'Constellations', () => core.constellations.lines_visible,
+        (v) => { core.constellations.lines_visible = v; core.constellations.labels_visible = v; }],
+      ['grid', 'RA/Dec grid', () => core.lines.equatorial.visible, (v) => { core.lines.equatorial.visible = v; }],
+      ['milky', 'Milky Way', () => core.milkyway.visible, (v) => { core.milkyway.visible = v; }],
+      ['atm', 'Atmosphere', () => core.atmosphere.visible, (v) => { core.atmosphere.visible = v; }],
+      ['land', 'Ground', () => core.landscapes.visible, (v) => { core.landscapes.visible = v; }],
+    ];
+    for (const [id, text, get, set] of toggles) {
+      const lab = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox'; box.id = 't-' + id;
+      try { box.checked = !!get(); } catch { box.checked = false; }
+      box.onchange = () => { try { set(box.checked); log(`${text}: ${box.checked ? 'on' : 'off'}`); } catch (e) { log(`${text}: ${e}`, 'bad'); } };
+      lab.append(box, text);
+      $('toggles').append(lab);
+    }
+
+    // controls
+    $('go').onclick = () => {
+      const ra = parseFloat($('ra').value), dec = parseFloat($('dec').value);
+      if (!(ra >= 0 && ra < 360 && dec >= -90 && dec <= 90)) { log('RA must be 0 to 360 and Dec -90 to 90 degrees.', 'bad'); return; }
+      pointAt(ra, dec, state.fov);
+    };
+    for (const id of ['ra', 'dec']) $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').click(); });
+    $('preset').onchange = (e) => {
+      if (!e.target.value) return;
+      const [ra, dec] = e.target.value.split(',').map(Number);
+      pointAt(ra, dec, 0.25);
+    };
+    $('fov').oninput = (e) => {
+      const deg = 10 ** parseFloat(e.target.value);
+      stel.zoomTo(deg * D2R, 0.2);
+      state.fov = deg; writeHash();
+    };
+    const step = (dir) => {
+      let f = state.band + dir;
+      while (BLANK.has(f)) f += dir;
+      if (f >= 0 && f <= 101) setBand(f);
+    };
+    $('band').oninput = (e) => { let f = +e.target.value; if (BLANK.has(f)) f = f === 50 ? 49 : 52; setBand(f); };
+    $('bandPrev').onclick = () => step(-1);
+    $('bandNext').onclick = () => step(1);
+    $('time').onclick = () => {
+      core.time_speed = core.time_speed ? 0 : 1;
+      $('time').textContent = core.time_speed ? 'Pause time' : 'Run time';
+      log('time ' + (core.time_speed ? 'running' : 'paused'));
+    };
+    $('time').textContent = 'Run time';
+    $('link').onclick = async () => {
+      writeHash();
+      try { await navigator.clipboard.writeText(location.href); log('link copied', 'ok'); }
+      catch { log('copy failed, link: ' + location.href); }
+    };
+    addEventListener('hashchange', () => {
+      const s = readHash();
+      if (s.band !== state.band) setBand(s.band);
+      if (s.ra !== state.ra || s.dec !== state.dec) pointAt(s.ra, s.dec, s.fov);
+    });
+
+    setBand(state.band);
+    pointAt(state.ra, state.dec, state.fov, 0);
+
+    // live readouts, once per animation frame (fps) and 4x a second (view)
+    let frames = 0, last = performance.now();
+    const tick = (t) => {
+      frames++;
+      if (t - last >= 250) {
+        $('d-fps').textContent = Math.round(frames * 1000 / (t - last));
+        frames = 0; last = t;
+        try {
+          const obsVec = core.observer.azalt;
+          const [th, ph] = stel.c2s(stel.convertFrame(core.observer, 'OBSERVED', 'ICRF', obsVec));
+          const ra = stel.anp(th) / D2R, dec = ph / D2R;
+          $('d-ra').textContent = `${hms(ra)}  ${ra.toFixed(4)}°`;
+          $('d-dec').textContent = `${dms(dec)}  ${dec.toFixed(4)}°`;
+        } catch (e) { $('d-ra').textContent = 'n/a'; $('d-dec').textContent = String(e); }
+        const fovDeg = core.fov / D2R;
+        $('d-fov').textContent = fovText(fovDeg);
+        $('fovLabel').textContent = fovText(fovDeg);
+        if (document.activeElement !== $('fov')) $('fov').value = Math.log10(fovDeg);
+        $('d-utc').textContent = core.observer.utc.toFixed(5) + (core.time_speed ? '' : ' (paused)');
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  },
+});
+</script>
+</body>
+</html>

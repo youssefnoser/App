@@ -142,6 +142,24 @@ Exposure counts for Barnard's Star (measured): 60/60/59/59/60/58 for D1 to D6 (3
   neighbours. Handle NaN everywhere.
 - **ES says flagged pixels near a source are only a warning.** The photometry tool's `CONTAINS_BAD_PIXEL` (bit 32) is "a conservative warning" and does not necessarily mean exclude the measurement (ES 3.3).
 
+## SPHEREx all-sky HiPS (sky background in the Stellarium view)
+
+All measured 2026-11-13 unless cited.
+
+- Served at `https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube` (its own `hips_service_url`, ID
+  `ivo://IPAC/P/SPHEREx/DR1/cube`). The IBE path `ibe/data/spherex/dr1/hips5_cube/hips_20261026` returns 404 for
+  `properties`, tiles and `Moc.fits`. Use the `/data/hips/` URL.
+- Properties recorded in `tests/fixtures/hips_spherex_properties.txt`: order 5 (min 0), 512 px PNG tiles,
+  pixel 0.0035786 deg (12.9 arcsec), equatorial, `dataproduct_type=cube`, `hips_cube_depth=102`.
+- 102 frames in ascending wavelength, `data_cube_crval3_arr` 0.753 to 4.988 um. Frame index = 17*(band-1)+(channel-1).
+  Frames 50 and 51 (band 3 channel 17, band 4 channel 1, dichroic) are blank (from the properties `obs_description`).
+- Frame 0 is the unsuffixed tile `Npix{n}.png`; frames 1 to 101 are `Npix{n}_{frame}.png`. `_0` and `_102` return 404.
+  `Norder3/Allsky.png` and `Allsky_{frame}.png` exist.
+- `t_min..t_max` = MJD 60789.75 to 61174.49. **It is a one-year coadd with no time axis.** Moving objects are smeared or
+  doubled in it. It is context only; motion comes from the level-2 exposures.
+- Tiles carry `access-control-allow-origin: *`. We still proxy them, because the Stellarium engine cannot address cube
+  slices (its tile URL is `Norder%d/Dir%d/Npix%d.%s` with no suffix) and so tiles get our disk cache.
+
 ## Browser access: CORS
 
 IRSA's cutout and TAP responses carried no `Access-Control-Allow-Origin` header when tested with an `Origin` header (measured).

@@ -18,7 +18,7 @@ Status column: `proposed` until the user decides. Nothing here should be built b
 | D | **Time by wavelength contact sheet**: a grid of thumbnails, x = date, y = wavelength, click a cell to open it | The whole dataset at a glance, gaps visible | Shows data coverage honestly, picks the cleanest frames | R3, O2 | medium | proposed |
 | E | **Onion skin trail**: previous N frames drawn faded under the current one | Motion visible in a single still | Works in screenshots and slides, no playback needed | R4 | low | proposed |
 | F | **Light curve at a click**: aperture flux versus date for a clicked source | A chart under the image | Needed for the variable test targets RW Aur and R Dra | R5 | medium | proposed |
-| G | **Aladin Lite context panel** (CDS) with Gaia DR3 and WISE overlays | A sky map beside the blink | Identifies known stars so the unknown stand out | O6, O9 | medium | proposed |
+| G | **Aladin Lite context panel** (CDS) with Gaia DR3 and WISE overlays | A sky map beside the blink | Identifies known stars so the unknown stand out | O6, O9 | medium | superseded: the main display is now the Stellarium sky with the SPHEREx HiPS (see `docs/superpowers/specs/2026-11-13-stellarium-spherex-design.md`) |
 
 ## Recommendation (the plan agent's opinion, not a decision)
 

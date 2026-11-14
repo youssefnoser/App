@@ -1,0 +1,57 @@
+hips_initial_fov     = 359.620
+creator_did          = ivo://IPAC/P/SPHEREx/DR1/cube
+#hips_creator        = HiPS creator (institute or person)
+#hips_copyright      = Copyright mention of the HiPS
+obs_title            = SPHEREx DR1 all-sky data cube
+#obs_collection      = Dataset collection name
+#obs_description     = Dataset text description
+#obs_ack             = Acknowledgement mention
+#prov_progenitor     = Provenance of the original data (free text)
+#bib_reference       = Bibcode for bibliographic reference
+#bib_reference_url   = URL to bibliographic reference
+#obs_copyright       = Copyright mention of the original data
+#obs_copyright_url   = URL to copyright page of the original data
+#em_min              = Start in spectral coordinates in meters ( =2.998E8/freq in Hz, or =1.2398841929E-12*energy in MeV )
+#em_max              = Stop in spectral coordinates in meters
+#t_min               = Start time in MJD ( =(Unixtime/86400)+40587  or https://heasarc.gsfc.nasa.gov/cgi-bin/Tools/xTime/xTime.pl)
+#t_max               = Stop time in MJD
+#obs_regime          = Waveband keyword (Radio Millimeter Infrared Optical UV EUV X-ray Gamma-ray)
+hips_builder         = Aladin/HipsGen v12.900
+hips_version         = 1.4
+hips_release_date    = 2026-11-01T01:58Z
+hips_frame           = equatorial
+hips_order           = 5
+hips_order_min       = 0
+hips_tile_width      = 512
+hips_service_url     = https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube
+hips_progenitor_url  = https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube/HpxFinder
+hips_status          = public master clonableOnce
+hips_tile_format     = png
+hips_pixel_scale     = 0.0035786
+dataproduct_type     = cube
+hips_cube_depth      = 102
+hips_cube_firstframe = 1
+hips_creation_date   = 2026-11-01T01:58Z
+
+# SPHEREx metadata
+obs_regime           = Infrared
+prov_progenitor      = SPHEREx / IPAC
+hips_creator         = SPHEREx Science Data Center
+hips_copyright       = Caltech/IPAC
+obs_copyright        = NASA/SPHEREx
+obs_collection       = SPHEREx DR1
+em_min               = 7.430000e-07
+em_max               = 5.009000e-06
+hips_initial_ra      = 180.00000
+hips_initial_dec     = -57.99462
+data_cube_bunit3     = um
+data_cube_crval3_arr = 0.753 0.771 0.790 0.809 0.828 0.848 0.868 0.889 0.910 0.932 0.955 0.978 1.001 1.025 1.050 1.075 1.102 1.113 1.139 1.167 1.195 1.224 1.254 1.284 1.315 1.346 1.378 1.412 1.446 1.481 1.517 1.554 1.592 1.631 1.656 1.695 1.735 1.775 1.818 1.861 1.905 1.949 1.995 2.041 2.089 2.139 2.189 2.240 2.292 2.345 2.399 2.445 2.506 2.575 2.646 2.719 2.794 2.871 2.951 3.033 3.118 3.204 3.293 3.383 3.476 3.570 3.667 3.768 3.833 3.867 3.901 3.935 3.970 4.005 4.040 4.076 4.112 4.148 4.184 4.220 4.257 4.294 4.331 4.368 4.405 4.435 4.467 4.500 4.533 4.566 4.600 4.635 4.669 4.704 4.739 4.773 4.808 4.843 4.879 4.915 4.951 4.988
+custom_tile_format   = fits-cube
+custom_tile_format_order = fits-cube:5
+t_min                = 60789.75076
+t_max                = 61174.49276
+hips_pixel_cut       = 0 40
+hips_pixel_function  = asinh
+hips_data_range      = -1418.79 11348.3
+obs_description      = SPHEREx DR1 all-sky data cube for visualization: 102 frames in ascending wavelength, one per band (1-6) and channel (1-17), frame index = 17*(band-1) + (channel-1). Frames 50 and 51 (band 3 channel 17, band 4 channel 1, the dichroic channels) are blank. See the SPHEREx Explanatory Supplement: https://irsa.ipac.caltech.edu/data/SPHEREx/docs/SPHEREx_Expsupp.pdf
+moc_sky_fraction     = 1.000000

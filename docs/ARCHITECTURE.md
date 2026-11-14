@@ -2,8 +2,12 @@
 
 ```
 browser (web/, vanilla ES modules, no build step)
+   │  Stellarium Web Engine (prebuilt wasm, served at /stel/) draws the sky:
+   │    survey layer  = SPHEREx all-sky HiPS, one wavelength slice at a time
+   │    photo layer   = the dated SPHEREx frames of the chosen patch, blinked
    │  GET /api/exposures?ra&dec           list of exposures covering the patch (~4 s)
    │  GET /api/frame?uri&ra&dec&fov       one reprojected frame, requested in parallel, shown as it arrives
+   │  GET /hips/spherex/{frame}/...       one HiPS wavelength slice, presented as a flat survey
    ▼
 server (server/, Python 3.11+, FastAPI)
    ├─ irsa.py       TAP search            -> list[Exposure]
@@ -11,9 +15,10 @@ server (server/, Python 3.11+, FastAPI)
    ├─ pixels.py     IMAGE - ZODI, flag masking
    ├─ reproject.py  north-up resample + wavelength lookup
    ├─ targets.py    test targets, proper-motion propagation
-   └─ app.py        HTTP routes only, no science logic
+   ├─ hips.py       HiPS slice proxy + tile cache
+   └─ app.py        HTTP routes and static mounts only, no science logic
    ▼
-IRSA (TAP + cutout service). The browser cannot call IRSA directly (see DATA.md, CORS).
+IRSA (TAP, cutout service, HiPS). The browser cannot call TAP or cutouts directly (see DATA.md, CORS).
 ```
 
 ## Decisions (change only with the user's agreement)
@@ -51,11 +56,26 @@ Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6
 `uri` must match `^ibe/data/spherex/[A-Za-z0-9_./-]+\.fits$`, otherwise 422. This stops the server fetching arbitrary URLs.
 502 if the cutout download fails (the client skips the frame and shows a count of skipped frames).
 
+### `GET /hips/spherex/{frame}/properties`
+
+`frame` is the HiPS cube frame index, int 0 to 101, otherwise 422. 200 `text/plain`: the upstream properties rewritten as a
+flat survey: `dataproduct_type`, `hips_cube_*`, `data_cube_*` and `custom_tile_format*` lines removed,
+`hips_service_url` set to this proxy path, `obs_title` suffixed with the slice wavelength.
+
+### `GET /hips/spherex/{frame}/Norder{k}/Dir{d}/Npix{n}.png` and `GET /hips/spherex/{frame}/Norder3/Allsky.png`
+
+200 `image/png`, the upstream tile for that slice (frame 0 unsuffixed, frames 1 to 101 with `_{frame}`, see DATA.md).
+Cached on disk under `.cache/hips/`. 404 if upstream has no such tile. 502 if upstream fails.
+
+### Static mounts
+
+`/` -> `web/`, `/stel/` -> `vendor/stellarium-web-engine/build/`, `/skydata/` -> `vendor/stellarium-web-engine/apps/test-skydata/`.
+
 ## URL hash schema (frontend)
 
 `ra`, `dec` (deg, float), `fov` (arcsec, default 126, max 360), `det` (comma list, default all), `speed` (fps, default 6),
 `mode` (`frame` | `coadd` | `diff` | more from DISPLAY-IDEAS), `win` (time window in days, 0 = none),
-`pmra`, `pmdec` (mas/yr, for the predicted-position marker). Invalid values fall back to defaults and never throw.
+`pmra`, `pmdec` (mas/yr, for the predicted-position marker), `band` (HiPS frame index 0 to 101, not 50 or 51; default 88, 4.533 um). Invalid values fall back to defaults and never throw.
 
 ## Files
 
@@ -66,12 +86,16 @@ Header `X-Frame-Meta`: JSON `{"n":41,"scale_arcsec":3.075,"mjd":...,"detector":6
 | `server/cutouts.py` | `fetch_cutout()` |
 | `server/pixels.py` | `science_image()` (IMAGE minus ZODI, bad-pixel masking), `BAD_PIXEL_MASK` |
 | `server/reproject.py` | `reproject_frame()` |
-| `server/app.py` | routes |
+| `server/hips.py` | HiPS slice proxy: properties rewrite, tile URL mapping, tile cache |
+| `server/app.py` | routes, static mounts |
 | `web/index.html`, `web/css/app.css` | page shell |
 | `web/js/state.js` | hash parse/serialise |
 | `web/js/stretch.js` | pixel to colour |
 | `web/js/windows.js` | time-window grouping and stacking |
 | `web/js/loader.js` | progressive frame loading |
+| `web/js/sky.js` | Stellarium engine start-up, data sources, survey switch, point at patch |
+| `web/js/bands.js` | HiPS frame index <-> wavelength, blank frames |
+| `web/js/overlay.js` | float32 frame -> image -> Stellarium photo object |
 | `web/js/app.js` | wiring, blink player |
 | `tests/` | pytest (server), `web/test/` node:test (frontend) |
 | `prototype/` | throwaway scripts that proved the pipeline. Read, copy ideas, do not import. |
