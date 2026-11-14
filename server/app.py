@@ -17,6 +17,7 @@ import time
 import warnings
 import zlib
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +29,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
+from server import diskcache
 from server.catalog import catalog
 from server.cutouts import CutoutError, cache_dir, check_uri, fetch_cutout
 from server.irsa import Exposure, IrsaError, find_exposures
@@ -73,7 +75,18 @@ CELL_CACHE_MAX_AGE_S = 86400.0
 MIRROR_DOWN = "The SPHEREx copy on AWS (the mirror) did not return this frame. Try again in a moment."
 IRSA_DOWN = "The SPHEREx archive (IRSA) did not return this frame. Try again."
 
-app = FastAPI(title="SPHEREx Blink")
+def _prune_soon() -> None:
+    """Hold the rendered caches under their size cap (server/diskcache.py)."""
+    diskcache.prune_in_background(cache_dir(), CELL_CACHE_MAX_AGE_S)
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    _prune_soon()  # a server that was stopped over a full cache starts trimmed
+    yield
+
+
+app = FastAPI(title="SPHEREx Blink", lifespan=_lifespan)
 
 
 def pixel_source() -> str:
@@ -112,6 +125,16 @@ def _write_atomic(path: Path, data: bytes) -> None:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+    diskcache.note_write(_prune_soon)
+
+
+def _read_cached(png_path: Path, meta_path: Path) -> tuple[bytes, dict]:
+    """A rendered frame and its metadata from disk, marked as just used. Raises
+    OSError or ValueError on a miss (either file missing, or the JSON is bad)."""
+    out = png_path.read_bytes(), json.loads(meta_path.read_text())
+    diskcache.touch(png_path)
+    diskcache.touch(meta_path)
+    return out
 
 
 def _complete_snapshot_at(ra: float, dec: float) -> list[Exposure] | None:
@@ -291,7 +314,7 @@ def render_frame_cached(pix: int, uri: str) -> tuple[bytes, dict]:
     """
     png_path, meta_path = _frame_paths(pix, uri)
     try:
-        return png_path.read_bytes(), json.loads(meta_path.read_text())
+        return _read_cached(png_path, meta_path)
     except (OSError, ValueError):
         pass
     png, meta = _render_frame(pix, uri)
@@ -365,7 +388,7 @@ def render_stack_cached(pix: int, uri: str, cell: int) -> tuple[bytes, dict]:
     """As `render_frame_cached`, for the visit median."""
     png_path, meta_path = _frame_paths(pix, uri, kind=f"-stack/{cell}")
     try:
-        return png_path.read_bytes(), json.loads(meta_path.read_text())
+        return _read_cached(png_path, meta_path)
     except (OSError, ValueError):
         pass
     png, meta = _render_stack(pix, uri, cell)
@@ -463,6 +486,7 @@ def _seq_grid(uri: str, ra: float, dec: float, fov: float) -> tuple:
         try:
             with np.load(path) as saved:
                 out = (saved["grid"], float(saved["wavelength"]), json.loads(str(saved["meta"])))
+            diskcache.touch(path)
         except (OSError, ValueError, KeyError):
             with fetch_crop(uri, ra, dec, fov) as hdul, warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # SIP without -SIP CTYPE; applying it is intended
@@ -620,7 +644,7 @@ def sequence_frame(
     base = cache_dir() / "png" / f"v{RENDER_VERSION}-seq" / name[:2] / name
     png_path, meta_path = base.with_suffix(".png"), base.with_suffix(".json")
     try:
-        png, meta = png_path.read_bytes(), json.loads(meta_path.read_text())
+        png, meta = _read_cached(png_path, meta_path)
     except (OSError, ValueError):
         try:
             png, meta = _render_sequence_frame(uri, ra, dec, fov, roll, wavelength, width)
