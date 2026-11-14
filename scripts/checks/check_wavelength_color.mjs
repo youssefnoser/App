@@ -1,0 +1,48 @@
+// Manual browser check against a running development app and real backend.
+import assert from 'node:assert/strict';
+import {globSync} from 'node:fs';
+import {mkdir} from 'node:fs/promises';
+import {chromium} from '../../web/node_modules/@playwright/test/index.mjs';
+const browser=await chromium.launch({executablePath:globSync('/home/ubuntu/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux-arm64/chrome-headless-shell')[0],headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
+try {
+ const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ await page.goto((process.env.NEXT_CHECK_URL||'http://localhost:5173/')+'#ra=269.4521&dec=4.6934&fov=0.083333');
+ await page.waitForFunction(()=>!!window.__stel,{timeout:60000});
+ await page.waitForFunction(()=>document.querySelector('#time-knob')?.textContent.includes('2025'),{timeout:120000});
+ assert.equal(await page.getByRole('button',{name:'Toggle WISE overlay',exact:true}).count(),0);
+ assert.equal(await page.locator('.wise-pin').count(),0);
+ const toggle=page.getByRole('button',{name:'Color by wavelength',exact:true});
+ await toggle.click();assert.equal(await toggle.getAttribute('aria-pressed'),'true');
+ assert.equal(await page.locator('#stel-canvas').evaluate(e=>getComputedStyle(e).filter.includes('wavelength-tint')),true);
+ assert.equal(await page.locator('.wavelength-key').count(),0);
+ const before=await page.locator('feColorMatrix').getAttribute('values');
+ await mkdir('.cache/ui-regressions',{recursive:true});
+ await page.screenshot({path:'.cache/ui-regressions/wavelength-short.png'});
+ await page.keyboard.press('Tab');
+ assert.equal(await page.locator('.wavelength-key').count(),0);
+ assert.equal(await page.locator('#stel-canvas').evaluate(e=>getComputedStyle(e).filter.includes('wavelength-tint')),true);
+ await page.screenshot({path:'.cache/ui-regressions/wavelength-zen.png'});
+ await page.keyboard.press('Tab');
+ await page.getByRole('button',{name:'Choose infrared bands',exact:true}).click();
+ await page.waitForFunction(()=>getComputedStyle(document.querySelector('.band-pop')).opacity==='1');
+ assert.equal(await page.locator('#band-wavelength-gradient stop').count(),102);
+ await page.screenshot({path:'.cache/ui-regressions/band-gradient.png'});
+ await page.getByRole('spinbutton',{name:'Band number',exact:true}).fill('102');
+ await page.getByRole('button',{name:'Close band selection',exact:true}).click();
+ await page.waitForFunction(v=>document.querySelector('feColorMatrix')?.getAttribute('values')!==v,before,{timeout:120000});
+ await page.screenshot({path:'.cache/ui-regressions/wavelength-long.png'});
+ await page.screenshot({path:'.cache/ui-regressions/wavelength-gamma.png'});
+ await page.getByRole('button',{name:'Difference',exact:true}).click();
+ assert.equal(await toggle.isDisabled(),true);
+ assert.equal(await page.locator('#stel-canvas').evaluate(e=>getComputedStyle(e).filter.includes('sky-gamma')),true);
+ await page.getByRole('button',{name:'Raw',exact:true}).click();
+ await toggle.click();
+ assert.equal(await page.locator('#stel-canvas').evaluate(e=>getComputedStyle(e).filter.includes('sky-gamma')),true);
+ await page.keyboard.press('Tab');
+ await page.screenshot({path:'.cache/ui-regressions/gamma-gray.png'});
+ await page.locator('#stel-canvas').evaluate(e=>e.style.filter='none');
+ await page.screenshot({path:'.cache/ui-regressions/no-gamma-gray.png'});
+ assert.deepEqual(errors,[]);
+ console.log('PASS: real sky tinted, band changes tint, zen keeps color, comparisons keep their key, toggle restores grayscale.');
+} finally {await browser.close();}

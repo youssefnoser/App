@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start -p 5173",
     "check": "tsc --noEmit",
-    "test": "node --test 'tests/shared/*.test.js' && node --experimental-strip-types tests/unit/sky.test.ts && node --experimental-strip-types tests/unit/observations.test.ts && node --experimental-strip-types tests/unit/spectral.test.ts && node --experimental-strip-types tests/unit/backend.test.ts && node --experimental-strip-types tests/unit/resolve.test.ts && node --experimental-strip-types tests/unit/gaiaFetch.test.ts && node --experimental-strip-types tests/unit/zoom-ruler.test.ts && node --experimental-strip-types tests/unit/load-progress.test.ts && node --experimental-strip-types tests/unit/composite.test.ts",
+    "test": "node --test 'tests/shared/*.test.js' && node --experimental-strip-types tests/unit/sky.test.ts && node --experimental-strip-types tests/unit/observations.test.ts && node --experimental-strip-types tests/unit/spectral.test.ts && node --experimental-strip-types tests/unit/backend.test.ts && node --experimental-strip-types tests/unit/resolve.test.ts && node --experimental-strip-types tests/unit/gaiaFetch.test.ts && node --experimental-strip-types tests/unit/zoom-ruler.test.ts && node --experimental-strip-types tests/unit/load-progress.test.ts && node --experimental-strip-types tests/unit/composite.test.ts && node --experimental-strip-types tests/unit/wavelength-color.test.ts",
     "test:browser": "playwright test"
   },
   "dependencies": {

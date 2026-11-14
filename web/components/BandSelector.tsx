@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { wavelengthRGB } from '@/lib/wavelength-color';
 import { getBandWavelength } from '@/lib/spectral';
 import { GoogleLayersIcon, GoogleZoomInIcon, GoogleZoomOutIcon } from './GoogleMapIcons';
 
@@ -69,11 +70,16 @@ export default function BandSelector({ selected, onSelection, onOpenChange, wave
       </form>
       <p id="band-number-help" className="band-pop-error" role="status">{error}</p>
 
-      <div className="band-ruler">
+      <div className="band-ruler" title="False color by infrared wavelength: violet is shorter, red is longer.">
         <svg viewBox={`0 0 ${RULER_W} 30`} preserveAspectRatio="none" aria-hidden="true">
+          <defs><linearGradient id="band-wavelength-gradient">
+            {Array.from({ length: BANDS }, (_, i) => <stop key={i} offset={`${tickX(i + 1) / RULER_W * 100}%`} stopColor={`rgb(${wavelengthRGB(getBandWavelength(i + 1)).map(c => Math.round(c * 255)).join(',')})`} />)}
+          </linearGradient></defs>
+          <rect x="0" y="25" width={RULER_W} height="3" rx="1.5" fill="url(#band-wavelength-gradient)" />
           {Array.from({ length: BANDS }, (_, i) => {
             const b = i + 1, x = tickX(b), edge = (b - 1) % PER_DETECTOR === 0 || b % PER_DETECTOR === 0;
-            return <line key={b} x1={x} x2={x} y1={edge ? 8 : 14} y2={26} className={Math.floor(i / PER_DETECTOR) + 1 === detector ? 'on' : ''} />;
+            const color = `rgb(${wavelengthRGB(getBandWavelength(b)).map(c => Math.round(c * 255)).join(',')})`;
+            return <line style={{ stroke: color }} key={b} x1={x} x2={x} y1={edge ? 8 : 14} y2={26} className={Math.floor(i / PER_DETECTOR) + 1 === detector ? 'on' : ''} />;
           })}
           <path className="band-ruler-marker" d={`M${tickX(band) - 4} 0h8l-4 6z`} />
           <line className="band-ruler-marker" x1={tickX(band)} x2={tickX(band)} y1={4} y2={30} />

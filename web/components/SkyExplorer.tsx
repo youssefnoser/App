@@ -152,7 +152,8 @@ export default function SkyExplorer() {
   const [searchError, setSearchError] = useState('');
   const [gaiaSources, setGaiaSources] = useState<GaiaSource[]>([]);
   const gaiaCone = useRef<Cone | null>(null);
-  const [wiseEnabled, setWiseEnabled] = useState(false);
+  const [wavelengthColor, setWavelengthColor] = useState(false);
+  const [zen, setZen] = useState(false);
   const [frameFilter, setFrameFilter] = useState<FrameFilter>('raw');
   const searchDock = useRef<HTMLDivElement>(null), searchInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -206,6 +207,23 @@ export default function SkyExplorer() {
     window.addEventListener('keyup', up);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
   }, [togglePlay]);
+  // Keep the engine and playback mounted while hiding all interface layers.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
+      const target = event.target;
+      const typing = target instanceof HTMLElement
+        && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+      if (typing || (event.key !== 'Tab' && !(zen && event.key === 'Escape'))) return;
+      event.preventDefault();
+      if (event.repeat) return;
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      setSearchOpen(false);
+      setZen(event.key === 'Escape' ? false : !zen);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zen]);
   const onField = useCallback((arcmin: number) => flyTo({ fovDeg: arcmin / 60 }), [flyTo]);
 
   // Gaia overlay: ask /api/gaia 400 ms after the view settles, and only when the view
@@ -380,7 +398,8 @@ export default function SkyExplorer() {
   }
   const target = targets[selected];
   const readout = viewCoordinates;
-  return <main>
+  const displayWavelength = sequence.steps[frame]?.meta?.wavelength_um ?? sequenceWavelength ?? getBandWavelength(bands[0] ?? 22);
+  return <main data-zen={zen}>
     <div
       className={`search-dock${searchOpen || query ? ' is-searching' : ''}`}
       ref={searchDock}
@@ -507,15 +526,16 @@ export default function SkyExplorer() {
         onProgress={setProgress}
         onView={onView}
         showFrames={showFrames}
-        grid={grid}
+        grid={grid && !zen}
         name={target?.name ?? lookup?.name ?? `${coordinates.ra.toFixed(4)}°, ${coordinates.dec >= 0 ? '+' : ''}${coordinates.dec.toFixed(4)}°`}
         objectType={target?.type ?? lookup?.type ?? 'CUSTOM COORDINATES'}
         gaiaEnabled={gaiaEnabled}
         gaiaSources={gaiaSources}
         observationMjd={sequence.steps[frame]?.mjd}
         onRecentre={(ra, dec) => { setSelected(-1); setLookup(null); updateCoordinates(ra, dec); }}
-        wiseEnabled={wiseEnabled}
         filter={frameFilter}
+        wavelengthColor={wavelengthColor && frameFilter === 'raw'}
+        displayWavelength={displayWavelength}
       />
       <div className="map-top">
         <div className="map-top-left">
@@ -524,6 +544,9 @@ export default function SkyExplorer() {
         <div className="map-top-right">{showFrames && <FrameFilterControl filter={frameFilter} onFilter={setFrameFilter} meta={sequence.steps[frame]?.meta ?? null} hasFrames={frameCount > 0} />}</div>
       </div>
       <div className="map-tools">
+        <button aria-label="Color by wavelength" aria-pressed={wavelengthColor} disabled={frameFilter !== 'raw'} title={frameFilter === 'raw' ? 'Color by infrared wavelength (false color)' : 'Select Raw to color by wavelength; comparisons use their own color key'} onClick={() => setWavelengthColor(value => !value)}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 18a9 9 0 0 1 18 0M6 18a6 6 0 0 1 12 0M9 18a3 3 0 0 1 6 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+        </button>
         <button
           aria-label="Recenter map"
           title="Recenter on target"
@@ -551,15 +574,7 @@ export default function SkyExplorer() {
         >
           G
         </button>
-        <button
-          aria-label="Toggle WISE overlay"
-          aria-pressed={wiseEnabled}
-          className={`overlay-toggle-btn ${wiseEnabled ? 'active' : ''}`}
-          title="AllWISE Mid-IR Overlay"
-          onClick={() => setWiseEnabled(!wiseEnabled)}
-        >
-          W
-        </button>
+
       </div>
       <BandSelector selected={bands} onSelection={onBands} wavelength={sequenceWavelength ?? getBandWavelength(bands[0] ?? 22)} width={sequenceWidth} onWavelength={onWavelength} onWidth={setSequenceWidth} />
       <ZoomRuler field={5 / zoom} status={status} frames={frameCount} onChange={onField} />

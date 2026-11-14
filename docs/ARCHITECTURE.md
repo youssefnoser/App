@@ -88,6 +88,7 @@ Object names are resolved in the browser by CDS Sesame (it allows any origin), n
 | `server/pixels.py` | `science_image()` (IMAGE minus ZODI, saturation-aware masking), `masked_pixels()`, `BAD_PIXEL_MASK`, `HARD_PIXEL_MASK` |
 | `server/reproject.py` | `resample_north_up()` (NaN-aware north-up resampling), `wavelength_at()` |
 | `server/composite.py` | NaN-aware static-sky and previous-visit differences, and date-coloured trails |
+| `web/lib/wavelength-color.ts` | Display-only infrared wavelength false-color mapping and SVG tint matrix |
 | `web/lib/composite.ts` | Frame filter names and metadata colour keys |
 | `web/components/FrameFilterControl.tsx` | Raw, Difference, Previous visit and Trail controls and colour key |
 | `server/app.py` | routes, `render_frame_cached()`, `RENDER_VERSION` in the PNG cache path |
@@ -185,3 +186,7 @@ exposures for fill; they do not guarantee complete coverage for every exposure.
 ### Frame filters
 
 `/api/sequence` and `/api/frame.png` accept `filter=raw|difference|previous|trail` (default `raw`). Filtered sequences use separate cache keys. Difference subtracts the static sky; Previous visit subtracts the earlier visit (the next visit for the first); Trail colours earlier visits by date. Frame metadata supplies the reference dates and colour key.
+
+The wavelength-color toolbar toggle tints the Raw sky canvas using the displayed frame wavelength, falling back to the selected wavelength while loading. The band ruler inside the Bands menu uses the same wavelength colors, ordered from short (violet) to long (red); its gradient follows each band’s wavelength rather than spreading colors evenly over band numbers. Comparison modes keep their own color keys. Tab hides the interface and grid without unmounting the engine; Tab or Escape restores it.
+
+The canvas applies display gamma `output = input^1.6` in sRGB before wavelength tinting, darkening midtones while preserving black and peak white. This does not change cached science pixels.

@@ -1908,3 +1908,16 @@ body:not(.nav-collapsed) .search-dock.is-searching,
   .map-top-right { top: calc(100% + 8px); }
   .field-ruler { right: 64px; }
 }
+
+
+/* Zen view keeps the canvas mounted, so panning and the blink continue. */
+main[data-zen='true'] > :not(.sky),
+main[data-zen='true'] .sky > :not(.stel-container),
+main[data-zen='true'] .stel-container > :not(canvas):not(.wavelength-filter) {
+  display: none !important;
+}
+
+body:has(main[data-zen='true']) nextjs-portal { display: none; }
+.map-tools button:disabled { opacity: .4; cursor: default; }
+
+.band-ruler .band-ruler-marker { filter: none; }

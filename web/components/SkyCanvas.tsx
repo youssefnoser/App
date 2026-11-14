@@ -8,6 +8,7 @@ import { initSky, type Sky } from '@/shared/sky.js';
 import { createBackendSky, type BackendTimeline, type LoadProgress } from '@/shared/backend-sky.js';
 import { sequenceWindows } from '@/lib/backend-bands';
 import type { FrameFilter } from '@/lib/composite';
+import { wavelengthMatrix } from '@/lib/wavelength-color';
 import GaiaOverlay from './GaiaOverlay';
 import type { GaiaSource } from '@/shared/gaia.js';
 
@@ -31,6 +32,8 @@ type Props = {
   onView: (view: SkyView) => void;
   showFrames: boolean;
   filter: FrameFilter;
+  wavelengthColor: boolean;
+  displayWavelength: number;
   grid: boolean;
   name: string;
   objectType: string;
@@ -39,7 +42,6 @@ type Props = {
   gaiaSources?: GaiaSource[];
   observationMjd?: number;
   onRecentre?: (ra: number, dec: number) => void;
-  wiseEnabled: boolean;
 };
 
 // Next.js-only display choices on top of the shared setup: no planets (the only
@@ -64,6 +66,8 @@ export default function SkyCanvas({
   onView,
   showFrames,
   filter,
+  wavelengthColor,
+  displayWavelength,
   grid,
   name,
   objectType,
@@ -71,7 +75,6 @@ export default function SkyCanvas({
   gaiaSources = [],
   observationMjd,
   onRecentre,
-  wiseEnabled,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const skyRef = useRef<Sky | null>(null);
@@ -172,12 +175,23 @@ export default function SkyCanvas({
 
   return (
     <div className="stel-container" style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+      <svg className="wavelength-filter" width="0" height="0" aria-hidden="true" style={{position:'absolute',pointerEvents:'none'}}>
+        <defs>
+          <filter id="sky-gamma" colorInterpolationFilters="sRGB">
+            <feComponentTransfer><feFuncR type="gamma" amplitude="1" exponent="1.6" offset="0" /><feFuncG type="gamma" amplitude="1" exponent="1.6" offset="0" /><feFuncB type="gamma" amplitude="1" exponent="1.6" offset="0" /></feComponentTransfer>
+          </filter>
+          <filter id="wavelength-tint" colorInterpolationFilters="sRGB">
+            <feComponentTransfer><feFuncR type="gamma" amplitude="1" exponent="1.6" offset="0" /><feFuncG type="gamma" amplitude="1" exponent="1.6" offset="0" /><feFuncB type="gamma" amplitude="1" exponent="1.6" offset="0" /></feComponentTransfer>
+            <feColorMatrix type="matrix" values={wavelengthMatrix(displayWavelength)} />
+          </filter>
+        </defs>
+      </svg>
       <canvas
         ref={canvasRef}
         id="stel-canvas"
         className="stel-canvas sky-canvas"
         aria-label="Sky view. Drag to pan, scroll to zoom."
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block' }}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', filter: wavelengthColor ? 'url(#wavelength-tint)' : 'url(#sky-gamma)' }}
       />
       <div
         id="object-label"
@@ -208,16 +222,7 @@ export default function SkyCanvas({
           onRecentre={(ra, dec) => onRecentre?.(ra, dec)}
         />
       )}
-      {wiseEnabled && (
-        <div
-          className="catalog-pin wise-pin"
-          style={{ left: marker.x + 46 * markerScale, top: marker.y + 34 * markerScale, display, transformOrigin: 'center center', transform: `scale(${markerScale.toFixed(3)})` }}
-          title="AllWISE Mid-Infrared Counterpart"
-        >
-          <span className="catalog-pin-dot wise-dot" />
-          <span className="catalog-pin-text">WISE</span>
-        </div>
-      )}
+
     </div>
   );
 }

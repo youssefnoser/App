@@ -20,12 +20,14 @@ try {
  assert.equal(await band.getAttribute('aria-expanded'),'false');
  await band.hover();
  assert.equal(await band.evaluate(e=>getComputedStyle(e).borderTopColor),'rgba(255, 255, 255, 0.48)');
- for(const name of ['Toggle Gaia DR3 overlay','Toggle WISE overlay']) {
+ for(const name of ['Toggle Gaia DR3 overlay']) {
   const b=page.getByRole('button',{name,exact:true});await b.click();await page.waitForTimeout(250);
   assert.equal(await b.evaluate(e=>getComputedStyle(e).boxShadow),'none');
   assert.equal(await b.evaluate(e=>getComputedStyle(e).backdropFilter),'none');
   await b.click();
  }
+ assert.equal(await page.getByRole('button',{name:'Toggle WISE overlay',exact:true}).count(),0);
+ assert.equal(await page.locator('.wise-pin').count(),0);
  await mkdir('.cache/ui-regressions',{recursive:true});
  await page.screenshot({path:'.cache/ui-regressions/desktop.png'});
  for(const name of ['Difference','Previous visit','Trail','Raw']) {
