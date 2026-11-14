@@ -40,6 +40,16 @@
     <button id="play" type="button">Play blink</button>
     <button id="next" type="button">Next</button>
   </div>
+  <label for="detector">Blink within one detector (one colour band)</label>
+  <select id="detector">
+    <option value="1">Detector 1: 0.74 to 1.12 micron</option>
+    <option value="2" selected>Detector 2: 1.10 to 1.65 micron</option>
+    <option value="3">Detector 3: 1.64 to 2.42 micron</option>
+    <option value="4">Detector 4: 2.42 to 3.82 micron</option>
+    <option value="5">Detector 5: 3.81 to 4.42 micron</option>
+    <option value="6">Detector 6: 4.41 to 5.00 micron</option>
+    <option value="0">All detectors mixed</option>
+  </select>
   <p id="step-info"></p>
 
   <label for="wl">Background wavelength: <span id="wl-out">frame 90</span></label>

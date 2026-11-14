@@ -76,6 +76,20 @@ input[type=range] {
   margin: 0;
 }
 
+select {
+  box-sizing: border-box;
+  min-height: 44px;
+  width: 100%;
+  font: inherit;
+  padding: 0 8px;
+}
+
+label[for=detector] {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
 label[for=wl] {
   display: block;
   margin-top: 8px;
