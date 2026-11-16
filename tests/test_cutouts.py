@@ -100,3 +100,22 @@ def test_fetch_timeout_no_partial(isolated_cache):
 
 def test_downloads_semaphore_is_eight():
     assert cutouts.DOWNLOADS._value == 8
+
+
+def test_cache_dir_on_vercel_defaults_to_tmp(monkeypatch):
+    """A Vercel function bundle is read-only; only /tmp is writable."""
+    monkeypatch.delenv("SPHEREX_CACHE_DIR", raising=False)
+    monkeypatch.setenv("VERCEL", "1")
+    assert cutouts.cache_dir() == Path("/tmp/spherex-cache")
+
+
+def test_cache_dir_off_vercel_defaults_local(monkeypatch):
+    monkeypatch.delenv("SPHEREX_CACHE_DIR", raising=False)
+    monkeypatch.delenv("VERCEL", raising=False)
+    assert cutouts.cache_dir() == Path(".cache")
+
+
+def test_cache_dir_env_beats_vercel_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPHEREX_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("VERCEL", "1")
+    assert cutouts.cache_dir() == tmp_path
