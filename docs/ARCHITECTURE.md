@@ -71,16 +71,42 @@ cached forever in `cache_dir()/gaia/` (empty ones are not). 422 for invalid inpu
 
 Object names are resolved in the browser by CDS Sesame (it allows any origin), not by this server.
 
-## Files
+## Deployment on Vercel
 
-| Path | Responsibility |
+One Vercel project, two services (`vercel.json`). The top-level rewrites own all
+public traffic: `/api/*` goes to the `backend` service, everything else to `web`.
+A service sees the original request path, so the FastAPI routes and the browser
+fetches need no changes; the Next.js `/api` proxy stays for local dev against a
+separate backend.
+
+The backend service root is the repo root, so its function bundle contains
+`data/exposures.sqlite` (LFS, checked out at build) plus the Python sources; the
+`excludeFiles` list keeps the frontend and docs out of it. The bundle is past
+the standard 500 MB limit, so large functions (Fluid compute) must be enabled —
+default for new projects, `VERCEL_SUPPORT_LARGE_FUNCTIONS=1` otherwise.
+
+Vercel realities the code accommodates:
+- the bundle is read-only: `Catalog` opens the committed snapshot with
+  `immutable=1` (it was filled in WAL mode; SQLite would want to create -shm and
+  -wal beside it), and the static mounts skip directories the bundle excludes;
+- only `/tmp` is writable and it is empty on cold start: `cache_dir()` defaults
+  to `/tmp/spherex-cache` when `VERCEL` is set, and `SPHEREX_RENDER_CACHE_GB` /
+  `SPHEREX_EXPOSURE_CACHE_GB` must be set small in the project settings;
+- the cache-prune thread is a short-lived daemon (it exits after pruning), so it
+  does not keep a function instance billed for nothing.
+
+Dependencies install from `pyproject.toml` + `uv.lock` (uv is supported with no
+extra config); the engine build the Next.js app needs ships committed in
+`web/public/engine`, so the frontend build does not need `vendor/`.
+
+## Files| Path | Responsibility |
 |------|----------------|
 | `server/targets.py` | `TARGETS`, `propagate()` |
 | `server/irsa.py` | `find_exposures()` |
 | `server/gaia.py` | Gaia DR3 from IRSA TAP: `cone()` (brightest + fast movers), `source()` by id |
 | `server/cutouts.py` | `fetch_cutout()` |
 | `server/mirror.py` | `fetch_exposure()` (whole file from the AWS mirror, trimmed, LRU cache with a size cap), `cut()` (local crop), `prefetch()` |
-| `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()`, `Catalog.status()` (for `/health`) |
+| `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()`, `Catalog.status()` (for `/health`). Reads `.cache`/`meta/exposures.sqlite`, or the committed copy `data/exposures.sqlite` when there is no runtime snapshot (deployments) |
 | `server/diskcache.py` | size cap (`SPHEREX_RENDER_CACHE_GB`, default 3) and expiry for `png/`, `grids/`, `cutouts/`, `tap/`: `prune()`, `touch()` |
 | `scripts/data/snapshot_metadata.py` | fill the snapshot from IRSA TAP in time windows, resumable (network) |
 | `server/footprint.py` | `exposure_from_head()`: time, detector, obs id and footprint from a file's first 28,800 bytes (hand-parsed TAN + SIP) |
@@ -93,6 +119,8 @@ Object names are resolved in the browser by CDS Sesame (it allows any origin), n
 | `web/components/FrameFilterControl.tsx` | Raw, Difference, Previous visit and Trail controls and colour key |
 | `server/app.py` | routes, `render_frame_cached()`, `RENDER_VERSION` in the PNG cache path |
 | `scripts/data/resolve_targets.py` | one-off: SIMBAD positions and proper motions, cross-checked against Gaia DR3 |
+| `data/exposures.sqlite` | committed copy of the exposure snapshot (Git LFS, ~770 MB, 1.6 M rows). What deployments and fresh clones read when they have no `.cache` |
+| `vercel.json` | Vercel project config: two services (`web` = Next.js from `web/`, `backend` = `server.app:app` from the repo root) and rewrites routing `/api/*` to the backend, everything else to `web` |
 | `scripts/data/check_targets.py` | exposure counts per challenge target (network) |
 | `scripts/data/prewarm.py` | warm every frame the browser would request, and report the cost (network on a cold cache) |
 | `scripts/data/compare_masks.py` | archive-mask versus page-mask contact sheet, for judging a render change |

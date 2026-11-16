@@ -1,5 +1,7 @@
 """Offline tests for the local exposure snapshot."""
 
+import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,8 @@ from server.patches import footprint_contains
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BARNARD = (269.4463, 4.7677)
+# tests/conftest.py already hides the committed copy; this file re-points it at
+# its own files.
 
 
 @pytest.fixture
@@ -111,3 +115,102 @@ def test_status_reads_only_the_summary(tmp_path, exposures, monkeypatch):
     assert got[0] == {"complete": True, "through_mjd": 61357.5, "exposures": len(exposures)}
     assert cat.Catalog(tmp_path / "none.sqlite").status() == {
         "complete": False, "through_mjd": None, "exposures": 0}
+
+
+# --- the committed copy (data/exposures.sqlite, Git LFS, read-only deploys) ---
+
+
+def make_repo_copy(path: Path, exposures) -> None:
+    """A filled snapshot in WAL mode, like the real one, with no sidecar files:
+    a checkout of the committed copy is just the main file."""
+    conn = cat.open_db(path)
+    cat.add_exposures(conn, exposures)
+    cat.set_meta(conn, "complete", "1")
+    conn.commit()
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.commit()
+    conn.close()
+    for suffix in ("-wal", "-shm"):
+        Path(str(path) + suffix).unlink(missing_ok=True)
+
+
+def test_db_path_falls_back_to_the_committed_copy(tmp_path, monkeypatch, exposures):
+    """With no runtime snapshot, a Catalog reads data/exposures.sqlite: that is
+    what a deployment (or a fresh clone) has."""
+    repo = tmp_path / "data" / "exposures.sqlite"
+    repo.parent.mkdir()
+    make_repo_copy(repo, exposures)
+    monkeypatch.setattr(cat, "REPO_DB", repo)
+    monkeypatch.setenv("SPHEREX_CACHE_DIR", str(tmp_path / "cache"))
+    assert cat.db_path() == repo
+    c = cat.Catalog()
+    assert len(c.find(*BARNARD)) > 300
+    assert c.complete is True
+
+
+def test_runtime_snapshot_beats_the_committed_copy(tmp_path, monkeypatch, exposures):
+    """Local development keeps its own (fresher) snapshot; the committed copy is
+    for places that cannot fill one."""
+    monkeypatch.setenv("SPHEREX_CACHE_DIR", str(tmp_path / "cache"))
+    conn = cat.open_db()
+    cat.set_meta(conn, "complete", "1")
+    conn.commit()
+    conn.close()
+    repo = tmp_path / "data" / "exposures.sqlite"
+    repo.parent.mkdir()
+    make_repo_copy(repo, exposures)
+    monkeypatch.setattr(cat, "REPO_DB", repo)
+    assert cat.db_path() == tmp_path / "cache" / "meta" / "exposures.sqlite"
+
+
+def test_catalog_db_env_beats_both(tmp_path, monkeypatch, exposures):
+    monkeypatch.setenv("SPHEREX_CACHE_DIR", str(tmp_path / "cache"))
+    conn = cat.open_db()
+    conn.close()
+    repo = tmp_path / "data" / "exposures.sqlite"
+    repo.parent.mkdir()
+    make_repo_copy(repo, exposures)
+    monkeypatch.setattr(cat, "REPO_DB", repo)
+    custom = tmp_path / "custom.sqlite"
+    make_repo_copy(custom, exposures)
+    monkeypatch.setenv("SPHEREX_CATALOG_DB", str(custom))
+    assert cat.db_path() == custom
+    c = cat.Catalog()
+    assert len(c.find(*BARNARD)) > 300
+    assert c.complete is True
+
+
+def test_committed_copy_reads_from_a_read_only_directory(tmp_path, monkeypatch, exposures):
+    """On Vercel the function bundle is read-only. The snapshot was written in
+    WAL mode, so a lookup must not need to create -shm/-wal next to it, and
+    must not try to write anything at all."""
+    repo = tmp_path / "data" / "exposures.sqlite"
+    repo.parent.mkdir()
+    make_repo_copy(repo, exposures)
+    monkeypatch.setattr(cat, "REPO_DB", repo)
+    monkeypatch.setenv("SPHEREX_CACHE_DIR", str(tmp_path / "cache"))
+    try:
+        repo.chmod(0o444)
+        repo.parent.chmod(0o555)
+        c = cat.Catalog()
+        assert len(c.find(*BARNARD)) > 300
+        assert c.complete is True
+        assert c.status()["exposures"] == len(exposures)
+    finally:
+        repo.parent.chmod(0o755)
+        repo.chmod(0o644)
+    assert not list(repo.parent.glob("exposures.sqlite-*"))
+
+
+def test_read_only_open_matches_the_plain_one(tmp_path, monkeypatch, exposures):
+    """The committed copy answers exactly like a writable snapshot would."""
+    repo = tmp_path / "data" / "exposures.sqlite"
+    repo.parent.mkdir()
+    make_repo_copy(repo, exposures)
+    monkeypatch.setattr(cat, "REPO_DB", repo)
+    runtime = tmp_path / "cache" / "meta" / "exposures.sqlite"
+    runtime.parent.mkdir(parents=True)
+    make_repo_copy(runtime, exposures)
+    monkeypatch.setenv("SPHEREX_CACHE_DIR", str(tmp_path / "cache"))
+    got = cat.Catalog().find(*BARNARD)
+    assert got == cat.Catalog(runtime).find(*BARNARD)

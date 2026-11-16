@@ -43,7 +43,16 @@ def cutout_url(uri: str, ra: float, dec: float, size_deg: float) -> str:
 
 
 def cache_dir() -> Path:
-    return Path(os.environ.get("SPHEREX_CACHE_DIR", ".cache"))
+    """Where the disk caches live: SPHEREX_CACHE_DIR, default `.cache` beside the
+    code. A Vercel function bundle is read-only and /tmp is the only writable
+    place (ephemeral, empty on cold start), so a Vercel function defaults to
+    /tmp/spherex-cache."""
+    env = os.environ.get("SPHEREX_CACHE_DIR")
+    if env:
+        return Path(env)
+    if os.environ.get("VERCEL"):
+        return Path("/tmp/spherex-cache")
+    return Path(".cache")
 
 
 def _cache_path(uri: str, ra: float, dec: float, size_deg: float) -> Path:

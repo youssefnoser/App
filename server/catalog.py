@@ -2,13 +2,17 @@
 
 One SQLite file under cache_dir()/meta/exposures.sqlite holds every exposure's
 path, time, detector, obs id and footprint corners, filled by
-`scripts/data/snapshot_metadata.py`. A lookup keeps the footprint centres in memory
-as unit vectors, picks the exposures whose centre is within their own radius of
-the point, then runs the exact footprint test (`patches.footprint_contains`), the
-same rule the view route uses. NaN never appears here: rows hold no pixels.
+`scripts/data/snapshot_metadata.py`. `data/exposures.sqlite` is a committed copy
+of the same snapshot (Git LFS): it is what deployments read, since they cannot
+fill a snapshot themselves; see `db_path()` for which file wins. A lookup keeps
+the footprint centres in memory as unit vectors, picks the exposures whose
+centre is within their own radius of the point, then runs the exact footprint
+test (`patches.footprint_contains`), the same rule the view route uses. NaN
+never appears here: rows hold no pixels.
 """
 
 import json
+import os
 import sqlite3
 import threading
 from pathlib import Path
@@ -20,6 +24,10 @@ from server.irsa import Exposure
 from server.patches import cell_unit_vectors, footprint_contains
 
 RADIUS_MARGIN_DEG = 0.01
+
+# The committed copy of the snapshot (Git LFS). Deployments have no .cache to
+# fill, so this is what they read, and it is read-only there (Vercel bundle).
+REPO_DB = Path(__file__).resolve().parent.parent / "data" / "exposures.sqlite"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS exposures (
@@ -40,7 +48,20 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 
 def db_path() -> Path:
-    return cache_dir() / "meta" / "exposures.sqlite"
+    """Which snapshot a Catalog reads, in order: SPHEREX_CATALOG_DB, the runtime
+    snapshot under cache_dir()/meta (what the fill scripts write, and the
+    freshest one on a dev machine), the committed copy data/exposures.sqlite
+    (what deployments and fresh clones have), and back to the runtime path when
+    nothing is on disk yet, so the fill scripts have somewhere to write."""
+    env = os.environ.get("SPHEREX_CATALOG_DB")
+    if env:
+        return Path(env)
+    runtime = cache_dir() / "meta" / "exposures.sqlite"
+    if runtime.exists():
+        return runtime
+    if REPO_DB.exists():
+        return REPO_DB
+    return runtime
 
 
 def open_db(path: Path | None = None) -> sqlite3.Connection:
@@ -105,6 +126,19 @@ class Catalog:
         self._cos_radius = np.zeros(0)
         self.complete = False
 
+    def _connect(self, timeout_s: float = 30) -> sqlite3.Connection:
+        """Open the snapshot for reading. The committed copy (data/
+        exposures.sqlite) is opened immutable: a deployment bundle is read-only,
+        and SQLite in WAL mode wants to create -shm/-wal next to the file, which
+        fails there. immutable needs no side files and no locks; the file never
+        changes during a deployment. The runtime snapshot can change while the
+        server runs, so it keeps its normal (reloadable) connection.
+        """
+        if self.path == REPO_DB:
+            return sqlite3.connect(
+                f"file:{self.path}?mode=ro&immutable=1", uri=True, timeout=timeout_s)
+        return sqlite3.connect(self.path, timeout=timeout_s)
+
     def _load(self) -> bool:
         try:
             stat = self.path.stat()
@@ -113,7 +147,7 @@ class Catalog:
         stamp = (stat.st_mtime_ns, stat.st_size)
         if stamp == self._stamp:
             return True
-        conn = sqlite3.connect(self.path, timeout=30)
+        conn = self._connect()
         try:
             data = conn.execute("SELECT id, cx, cy, cz, radius_deg FROM exposures").fetchall()
             self.complete = get_meta(conn, "complete") == "1"
@@ -142,7 +176,7 @@ class Catalog:
         if not self.path.exists():
             return empty
         try:
-            conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=1)
+            conn = self._connect(timeout_s=1)
         except sqlite3.Error:
             return empty
         try:
@@ -174,7 +208,7 @@ class Catalog:
             near = self._ids[self._centres @ point >= self._cos_radius]
         if near.size == 0:
             return []
-        conn = sqlite3.connect(self.path, timeout=30)
+        conn = self._connect()
         try:
             found = []
             ids = [int(i) for i in near]

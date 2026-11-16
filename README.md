@@ -149,12 +149,42 @@ The list is saved to `.cache/meta/exposures.sqlite`, and the script picks up whe
 Re-run it after each new SPHEREx data release. `scripts/data/snapshot_metadata.py` builds the same list from IRSA
 instead of from AWS.
 
+A filled list is also committed to this repo as `data/exposures.sqlite` (Git LFS, so it does not bloat git history).
+The backend reads that copy whenever a machine has no list of its own — a fresh clone, and every deployment. On a dev
+machine your own `.cache` list wins, because it is the one the scripts keep fresh. To ship a new release, run a fill
+script, copy the result over `data/exposures.sqlite`, and commit; the file is LFS-tracked, so Git handles it.
+
+## Deploy on Vercel
+
+`vercel.json` defines one project with two services: the Next.js app (service `web`, root `web/`) and the FastAPI
+backend (service `backend`, root `.`). Vercel routes `/api/*` to the backend service and everything else to the app;
+the backend sees the original path, so no route changes were needed. Locally nothing changes: `uvicorn` and the
+Next.js proxy work exactly as before.
+
+1. **Push, including Git LFS.** The exposure snapshot is a ~770 MB LFS object; the first push uploads it once.
+   Run `git lfs install` once per machine before committing anything to it.
+2. **Import the repo at vercel.com** (Add New → Project). No build settings are needed; `vercel.json` carries them.
+   In the project's Git settings, turn **Git LFS** on, so the build checks out `data/exposures.sqlite` as a real file
+   and not a pointer.
+3. **Environment variables** (all environments, they apply to the backend service):
+   - `SPHEREX_RENDER_CACHE_GB=0.4` and `SPHEREX_EXPOSURE_CACHE_GB=0.5` — a function's `/tmp` is small and ephemeral,
+     far below the local 3 GB / 6 GB defaults.
+   - `SPHEREX_CACHE_DIR=/tmp/spherex-cache` is optional: on Vercel the code already defaults there.
+   - `VERCEL_SUPPORT_LARGE_FUNCTIONS=1` — only if the project was created before large functions were the default;
+     the snapshot pushes the backend function bundle past the standard 500 MB, and large functions (5 GB, Fluid
+     compute) are what allow that.
+4. Deploy. First frame requests are slow (cold start plus exposure download); later ones hit the warm caches.
+
+Local development still uses the hosted or local backend as described under "Run it"; the Vercel config only affects
+deployments.
+
 ## Settings
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `SPHEREX_BACKEND_URL` | `http://130.61.174.88:8000` | Set in `web/.env.local`. The backend the main app talks to. |
-| `SPHEREX_CACHE_DIR` | `.cache` | Where downloads, cut-outs and the exposure list are stored. |
+| `SPHEREX_CACHE_DIR` | `.cache` (Vercel: `/tmp/spherex-cache`) | Where downloads, cut-outs and the exposure list are stored. |
+| `SPHEREX_CATALOG_DB` | — | Use a specific exposure snapshot file instead of the resolution order (runtime snapshot, then `data/exposures.sqlite`). |
 | `SPHEREX_EXPOSURE_CACHE_GB` | `6` | Size limit for downloaded exposure files. The least recently used are removed first. |
 | `SPHEREX_RENDER_CACHE_GB` | `3` | Size limit for rendered frames and resampled grids. With the defaults and the exposure list, the cache folder stays under 10 GB. |
 | `SPHEREX_SOURCE` | `aws` | Set to `irsa` to fetch one small cut-out per patch from IRSA instead of whole files from AWS. |

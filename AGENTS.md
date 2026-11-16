@@ -49,7 +49,9 @@ cd web && npm run dev            # main app at :5173 (SPHEREX_BACKEND_URL in web
   Pixels come from the AWS mirror by default (whole exposure files, cut locally, size-capped cache: `server/mirror.py`), and the
   exposure list from the local snapshot (`server/catalog.py`). IRSA is asked only when the snapshot has no answer, and by
   `scripts/data/snapshot_metadata.py`, which polls queued TAP jobs every 10 s until they answer (user decision, 2026-11-13).
-- **Do not commit data.** `data/`, `.cache/`, `*.fits` are ignored. A full Barnard's Star crop set is 1.4 GB.
+- **Do not commit data.** `data/`, `.cache/`, `*.fits` are ignored, with one exception: `data/exposures.sqlite`, the
+  exposure snapshot, is committed through Git LFS so deployments can read it (`git lfs install` first). A full
+  Barnard's Star crop set is 1.4 GB.
 - **Keep files small and single-purpose.** The file table in `docs/ARCHITECTURE.md` is the map. Add a row when you add a file.
 - **Copy and tone for UI text:** plain sentences, say what happened and what to do next, no jargon without a gloss (MJy/sr, PSF, MJD).
 
