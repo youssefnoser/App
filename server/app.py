@@ -103,6 +103,7 @@ def pixel_source() -> str:
 
 
 @app.get("/health")
+@app.get("/api/health")  # deployments route only /api/* to the backend
 def health() -> dict:
     """Backend is up, plus how fresh the local exposure list is: `snapshot.complete`,
     `snapshot.through_mjd` (filled up to this date, MJD) and `snapshot.exposures`.

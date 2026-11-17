@@ -44,6 +44,14 @@ def test_health_ok():
     assert isinstance(body["snapshot"]["exposures"], int)
 
 
+def test_health_is_also_under_api():
+    """Deployments route only /api/* to the backend (vercel.json), so the same
+    status is served at /api/health."""
+    response = TestClient(app).get("/api/health")
+    assert response.status_code == 200
+    assert response.json() == TestClient(app).get("/health").json()
+
+
 def test_health_reports_snapshot_freshness(monkeypatch, tmp_path):
     """With a complete snapshot, /health says how far the data reaches."""
     from server import catalog as catalog_module

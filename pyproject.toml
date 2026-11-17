@@ -12,6 +12,7 @@ dependencies = [
     "numpy",
     "scipy",
     "pillow",
+    "psycopg[binary]>=3.3.9",
 ]
 
 [dependency-groups]

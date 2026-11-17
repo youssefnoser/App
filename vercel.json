@@ -10,7 +10,7 @@
       "entrypoint": "server.app:app",
       "functions": {
         "server.app": {
-          "excludeFiles": "{vendor,docs,tests,scripts,testbench,web,.venv,.pytest_cache,.superpowers,.vscode,.claude}/**"
+          "excludeFiles": "{data,vendor,docs,tests,scripts,testbench,web,.venv,.pytest_cache,.superpowers,.vscode,.claude}/**"
         }
       }
     }

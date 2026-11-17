@@ -161,19 +161,19 @@ backend (service `backend`, root `.`). Vercel routes `/api/*` to the backend ser
 the backend sees the original path, so no route changes were needed. Locally nothing changes: `uvicorn` and the
 Next.js proxy work exactly as before.
 
-1. **Push, including Git LFS.** The exposure snapshot is a ~770 MB LFS object; the first push uploads it once.
-   Run `git lfs install` once per machine before committing anything to it.
+1. **Push.** Deployments do not read `data/exposures.sqlite`: at 804 MB it cannot fit Vercel's 500 MB Python bundle
+   limit (the dependencies alone take 243 MB), and `vercel.json` keeps `data/` out of the bundle. The backend reads
+   the same snapshot from PostgreSQL instead (`server/catalog_pg.py`).
 2. **Import the repo at vercel.com** (Add New → Project). No build settings are needed; `vercel.json` carries them.
-   In the project's Git settings, turn **Git LFS** on, so the build checks out `data/exposures.sqlite` as a real file
-   and not a pointer.
 3. **Environment variables** (all environments, they apply to the backend service):
+   - `SPHEREX_CATALOG_URL` — the read-only PostgreSQL URL of the exposure snapshot (mark it sensitive). Without it
+     every exposure list comes from IRSA TAP, which is too slow for a function.
    - `SPHEREX_RENDER_CACHE_GB=0.4` and `SPHEREX_EXPOSURE_CACHE_GB=0.5` — a function's `/tmp` is small and ephemeral,
      far below the local 3 GB / 6 GB defaults.
    - `SPHEREX_CACHE_DIR=/tmp/spherex-cache` is optional: on Vercel the code already defaults there.
-   - `VERCEL_SUPPORT_LARGE_FUNCTIONS=1` — only if the project was created before large functions were the default;
-     the snapshot pushes the backend function bundle past the standard 500 MB, and large functions (5 GB, Fluid
-     compute) are what allow that.
-4. Deploy. First frame requests are slow (cold start plus exposure download); later ones hit the warm caches.
+4. Deploy, then open `/api/health`: `snapshot.complete` must be `true` with 1.6 million exposures. If it is `false`
+   with 0 exposures, the backend cannot reach the database; the function logs say why. First frame requests are slow
+   (cold start plus exposure download); later ones hit the warm caches.
 
 Local development still uses the hosted or local backend as described under "Run it"; the Vercel config only affects
 deployments.
@@ -184,6 +184,7 @@ deployments.
 |----------|---------|--------------|
 | `SPHEREX_BACKEND_URL` | `http://130.61.174.88:8000` | Set in `web/.env.local`. The backend the main app talks to. |
 | `SPHEREX_CACHE_DIR` | `.cache` (Vercel: `/tmp/spherex-cache`) | Where downloads, cut-outs and the exposure list are stored. |
+| `SPHEREX_CATALOG_URL` | — | Read the exposure snapshot from this PostgreSQL URL (same tables as the SQLite file) instead of a file. Set on deployments. |
 | `SPHEREX_CATALOG_DB` | — | Use a specific exposure snapshot file instead of the resolution order (runtime snapshot, then `data/exposures.sqlite`). |
 | `SPHEREX_EXPOSURE_CACHE_GB` | `6` | Size limit for downloaded exposure files. The least recently used are removed first. |
 | `SPHEREX_RENDER_CACHE_GB` | `3` | Size limit for rendered frames and resampled grids. With the defaults and the exposure list, the cache folder stays under 10 GB. |

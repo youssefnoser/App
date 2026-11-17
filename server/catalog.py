@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+from server.catalog_pg import PgCatalog
 from server.cutouts import cache_dir
 from server.irsa import Exposure
 from server.patches import cell_unit_vectors, footprint_contains
@@ -232,10 +233,19 @@ class Catalog:
 
 
 _catalogs: dict[Path, Catalog] = {}
+_pg_catalog: PgCatalog | None = None
 
 
-def catalog() -> Catalog:
-    """The shared Catalog for the current cache directory."""
+def catalog() -> Catalog | PgCatalog:
+    """The shared snapshot reader: PostgreSQL when SPHEREX_CATALOG_URL is set
+    (deployments, see server/catalog_pg.py), else the SQLite Catalog for the
+    current cache directory."""
+    global _pg_catalog
+    url = os.environ.get("SPHEREX_CATALOG_URL")
+    if url:
+        if _pg_catalog is None or _pg_catalog.url != url:
+            _pg_catalog = PgCatalog(url)
+        return _pg_catalog
     path = db_path()
     if path not in _catalogs:
         _catalogs[path] = Catalog(path)

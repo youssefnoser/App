@@ -79,16 +79,20 @@ A service sees the original request path, so the FastAPI routes and the browser
 fetches need no changes; the Next.js `/api` proxy stays for local dev against a
 separate backend.
 
-The backend service root is the repo root, so its function bundle contains
-`data/exposures.sqlite` (LFS, checked out at build) plus the Python sources; the
-`excludeFiles` list keeps the frontend and docs out of it. The bundle is past
-the standard 500 MB limit, so large functions (Fluid compute) must be enabled —
-default for new projects, `VERCEL_SUPPORT_LARGE_FUNCTIONS=1` otherwise.
+The backend service root is the repo root; the `excludeFiles` list keeps the
+frontend, docs and `data/` out of its bundle. The exposure snapshot is not in
+the bundle: `data/exposures.sqlite` is 804 MB, Vercel's Python bundle limit is
+500 MB and the dependencies take 243 MB (and the build checked out only the LFS
+pointer, so the backend silently fell back to IRSA and timed out after 60 s).
+Deployments set `SPHEREX_CATALOG_URL`, and `catalog()` then reads the same
+tables from PostgreSQL (`server/catalog_pg.py`): the cone test runs in SQL, the
+exact footprint test in Python, answers are cached per point. `/api/health`
+(same as `/health`, which the rewrites do not route) shows whether it answers.
 
 Vercel realities the code accommodates:
-- the bundle is read-only: `Catalog` opens the committed snapshot with
-  `immutable=1` (it was filled in WAL mode; SQLite would want to create -shm and
-  -wal beside it), and the static mounts skip directories the bundle excludes;
+- the bundle is read-only: the static mounts skip directories the bundle
+  excludes (and `Catalog` opens a committed snapshot with `immutable=1`, for
+  machines that read the file);
 - only `/tmp` is writable and it is empty on cold start: `cache_dir()` defaults
   to `/tmp/spherex-cache` when `VERCEL` is set, and `SPHEREX_RENDER_CACHE_GB` /
   `SPHEREX_EXPOSURE_CACHE_GB` must be set small in the project settings;
@@ -106,7 +110,7 @@ extra config); the engine build the Next.js app needs ships committed in
 | `server/gaia.py` | Gaia DR3 from IRSA TAP: `cone()` (brightest + fast movers), `source()` by id |
 | `server/cutouts.py` | `fetch_cutout()` |
 | `server/mirror.py` | `fetch_exposure()` (whole file from the AWS mirror, trimmed, LRU cache with a size cap), `cut()` (local crop), `prefetch()` |
-| `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()`, `Catalog.status()` (for `/health`). Reads `.cache`/`meta/exposures.sqlite`, or the committed copy `data/exposures.sqlite` when there is no runtime snapshot (deployments) |
+| `server/catalog.py` | local SQLite snapshot of the exposure list: `Catalog.find()`, `add_exposures()`, `Catalog.status()` (for `/health`). Reads `.cache`/`meta/exposures.sqlite`, or the committed copy `data/exposures.sqlite` when there is no runtime snapshot; `catalog()` returns `PgCatalog` instead when `SPHEREX_CATALOG_URL` is set (deployments) |
 | `server/diskcache.py` | size cap (`SPHEREX_RENDER_CACHE_GB`, default 3) and expiry for `png/`, `grids/`, `cutouts/`, `tap/`: `prune()`, `touch()` |
 | `scripts/data/snapshot_metadata.py` | fill the snapshot from IRSA TAP in time windows, resumable (network) |
 | `server/footprint.py` | `exposure_from_head()`: time, detector, obs id and footprint from a file's first 28,800 bytes (hand-parsed TAN + SIP) |
@@ -119,7 +123,8 @@ extra config); the engine build the Next.js app needs ships committed in
 | `web/components/FrameFilterControl.tsx` | Raw, Difference, Previous visit and Trail controls and colour key |
 | `server/app.py` | routes, `render_frame_cached()`, `RENDER_VERSION` in the PNG cache path |
 | `scripts/data/resolve_targets.py` | one-off: SIMBAD positions and proper motions, cross-checked against Gaia DR3 |
-| `data/exposures.sqlite` | committed copy of the exposure snapshot (Git LFS, ~770 MB, 1.6 M rows). What deployments and fresh clones read when they have no `.cache` |
+| `server/catalog_pg.py` | the exposure snapshot read from PostgreSQL (`PgCatalog`: same `find()`, `complete`, `status()` as `Catalog`). `catalog()` picks it when `SPHEREX_CATALOG_URL` is set, which is how deployments read the snapshot |
+| `data/exposures.sqlite` | committed copy of the exposure snapshot (Git LFS, ~770 MB, 1.6 M rows). What fresh clones read when they have no `.cache`; too big for a Vercel bundle, so deployments read the PostgreSQL copy |
 | `vercel.json` | Vercel project config: two services (`web` = Next.js from `web/`, `backend` = `server.app:app` from the repo root) and rewrites routing `/api/*` to the backend, everything else to `web` |
 | `scripts/data/check_targets.py` | exposure counts per challenge target (network) |
 | `scripts/data/prewarm.py` | warm every frame the browser would request, and report the cost (network on a cold cache) |

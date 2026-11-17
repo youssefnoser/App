@@ -68,7 +68,8 @@ This is the default path (`SPHEREX_SOURCE=aws`; `irsa` switches back to the two 
 - **Exposure list.** `scripts/data/snapshot_metadata.py` copies `spherex.artifact` joined to `spherex.plane` into
   `.cache/meta/exposures.sqlite` through queued TAP jobs, one per 30 days of observation time. Re-run with `--refresh` after a data release.
   A filled list is also committed at `data/exposures.sqlite` (Git LFS); the backend falls back to it when there is no
-  local one, which is what deployments do (see ARCHITECTURE.md, "Deployment on Vercel").
+  local one. Deployments read the same rows from PostgreSQL (`SPHEREX_CATALOG_URL`, see ARCHITECTURE.md,
+  "Deployment on Vercel").
 - **Exposure list without IRSA.** `scripts/data/snapshot_from_aws.py` lists `dr1/level2/` and `qr3/level2/` (1,179,406 + 448,824 files,
   counted 2026-11-13; `qr2/` has 1,367,330 but is superseded: "DR1 and QR3 together supersede QR2", IRSA data-access guide) and reads
   the first 28,800 bytes of each file. The IMAGE header gives `MJD-BEG` (equal to TAP's `time_bounds_lower`), `DETECTOR`, `OBSID` and
