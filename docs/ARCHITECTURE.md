@@ -96,6 +96,12 @@ Vercel realities the code accommodates:
 - only `/tmp` is writable and it is empty on cold start: `cache_dir()` defaults
   to `/tmp/spherex-cache` when `VERCEL` is set, and `SPHEREX_RENDER_CACHE_GB` /
   `SPHEREX_EXPOSURE_CACHE_GB` must be set small in the project settings;
+- the memory and `/tmp` caches belong to one function instance and vanish with
+  it, so they only help repeat requests that land on a warm instance; frame
+  PNGs (`/api/frame.png`, `/api/patch/{pix}/frame.png`) carry `s-maxage` so the
+  Vercel CDN keeps each one for every viewer (`FRAME_CACHE_CONTROL` in
+  `server/app.py`); if a render change must reach a cached frame before the
+  next deployment, purge with `vercel cache purge --type cdn`;
 - the cache-prune thread is a short-lived daemon (it exits after pruning), so it
   does not keep a function instance billed for nothing.
 

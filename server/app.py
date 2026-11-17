@@ -79,6 +79,12 @@ CELL_CACHE_MAX_AGE_S = diskcache.TAP_MAX_AGE_S
 # What the page reads when a frame cannot be had. Sequence frames and wavelength
 # maps always come from the mirror (server/ranges.py); patch frames follow
 # SPHEREX_SOURCE.
+# A frame URL always draws the same image (same exposure, box and filter), so it
+# may be cached by the browser (max-age, a day) and by the Vercel CDN for every
+# viewer (s-maxage, a year), which spares the function on a cold instance.
+# Error responses carry no Cache-Control, so the CDN never keeps them.
+FRAME_CACHE_CONTROL = "public, max-age=86400, s-maxage=31536000, immutable"
+
 MIRROR_DOWN = "The SPHEREx copy on AWS (the mirror) did not return this frame. Try again in a moment."
 IRSA_DOWN = "The SPHEREx archive (IRSA) did not return this frame. Try again."
 
@@ -484,7 +490,7 @@ def patch_frame(
     return Response(
         png,
         media_type="image/png",
-        headers={"X-Frame-Meta": json.dumps(meta), "Cache-Control": "public, max-age=86400"},
+        headers={"X-Frame-Meta": json.dumps(meta), "Cache-Control": FRAME_CACHE_CONTROL},
     )
 
 
@@ -859,7 +865,7 @@ def sequence_frame(
     return Response(
         png,
         media_type="image/png",
-        headers={"X-Frame-Meta": json.dumps(meta), "Cache-Control": "public, max-age=86400"},
+        headers={"X-Frame-Meta": json.dumps(meta), "Cache-Control": FRAME_CACHE_CONTROL},
     )
 
 

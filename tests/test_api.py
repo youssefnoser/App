@@ -175,7 +175,10 @@ def test_frame_png(client, monkeypatch, tmp_path):
     r = client.get(f"/api/patch/{CELL}/frame.png?uri={GOOD_URI}")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
-    assert r.headers["cache-control"] == "public, max-age=86400"
+    # A frame URL always draws the same image, so the Vercel CDN may keep it for
+    # every viewer (s-maxage), not only the viewer's browser (max-age).
+    assert r.headers["cache-control"] == app_module.FRAME_CACHE_CONTROL
+    assert "s-maxage=" in r.headers["cache-control"]
     import io
 
     img = Image.open(io.BytesIO(r.content))
@@ -493,6 +496,7 @@ def test_sequence_frame_single_and_rolling(aws_client, monkeypatch, tmp_path):
     url = f"/api/frame.png?uri=ibe/data/spherex/s2.fits&{SEQ}"
     single = aws_client.get(url + "&roll=0")
     assert single.status_code == 200
+    assert single.headers["cache-control"] == app_module.FRAME_CACHE_CONTROL
     assert asked == ["ibe/data/spherex/s2.fits"]
     assert "stack" not in json.loads(single.headers["x-frame-meta"])
 
